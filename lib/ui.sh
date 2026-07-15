@@ -50,7 +50,10 @@ show_main_menu() {
       5)
         show_status
         ;;
-      1 | 2 | 3 | 4 | 6 | 7)
+      6)
+        show_backup_menu
+        ;;
+      1 | 2 | 3 | 4 | 7)
         printf '该功能将在后续实施切片中提供。\n'
         ;;
       *)
@@ -60,6 +63,66 @@ show_main_menu() {
   done
 }
 
+show_backup_menu() {
+  local choice value minutes
+  while true; do
+    printf '备份与恢复\n'
+    printf '1. 创建快照\n'
+    printf '2. 列出快照\n'
+    printf '3. 比较快照\n'
+    printf '4. 恢复快照\n'
+    printf '5. 启动自动回滚\n'
+    printf '6. 查询自动回滚\n'
+    printf '7. 确认并取消自动回滚\n'
+    printf '8. 设置快照保留数量\n'
+    printf '0. 返回主菜单\n'
+    printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1)
+        printf '快照标签：'
+        IFS= read -r value || return 0
+        create_snapshot "${value:-manual}"
+        ;;
+      2) list_snapshots ;;
+      3)
+        printf '快照 ID：'
+        IFS= read -r value || return 0
+        diff_snapshot "$value"
+        ;;
+      4)
+        printf '警告：恢复会覆盖当前受管配置。\n快照 ID：'
+        IFS= read -r value || return 0
+        restore_snapshot "$value" 0
+        ;;
+      5)
+        printf '快照 ID：'
+        IFS= read -r value || return 0
+        printf '回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        start_rollback "$value" "${minutes:-5}"
+        ;;
+      6)
+        printf '回滚令牌：'
+        IFS= read -r value || return 0
+        show_rollback_status "$value"
+        ;;
+      7)
+        printf '回滚令牌：'
+        IFS= read -r value || return 0
+        confirm_rollback "$value"
+        ;;
+      8)
+        printf '保留数量 [1-100]：'
+        IFS= read -r value || return 0
+        backup_cli retention "$value"
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
+}
+
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|backup|rollback|audit|help]\n'
 }

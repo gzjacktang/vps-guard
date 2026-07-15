@@ -12,6 +12,10 @@ source "$VPS_GUARD_ROOT/lib/core.sh"
 source "$VPS_GUARD_ROOT/lib/system.sh"
 # shellcheck source=lib/ui.sh
 source "$VPS_GUARD_ROOT/lib/ui.sh"
+# shellcheck source=lib/backup.sh
+source "$VPS_GUARD_ROOT/lib/backup.sh"
+# shellcheck source=lib/rollback.sh
+source "$VPS_GUARD_ROOT/lib/rollback.sh"
 
 DRY_RUN=0
 
@@ -52,6 +56,23 @@ main() {
       fi
       require_root
       show_main_menu
+      ;;
+    backup)
+      require_root
+      backup_cli "${@:2}"
+      ;;
+    rollback)
+      require_root
+      rollback_cli "${@:2}"
+      ;;
+    audit)
+      require_root
+      if [[ "$#" -eq 2 && "$2" == "list" ]]; then
+        show_audit_log
+      else
+        error "用法：vps-guard audit list"
+        return "$EXIT_USAGE"
+      fi
       ;;
     --help | -h | help)
       if [[ "$#" -gt 1 ]]; then

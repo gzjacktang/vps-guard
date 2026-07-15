@@ -74,6 +74,7 @@ check_dependencies() {
     "nft:nftables"
     "ss:iproute2"
     "systemctl:systemd"
+    "systemd-run:systemd"
     "sshd:openssh-server"
     "fail2ban-client:fail2ban"
   )
