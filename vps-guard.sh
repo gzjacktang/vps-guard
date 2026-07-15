@@ -10,6 +10,8 @@ VPS_GUARD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$VPS_GUARD_ROOT/lib/core.sh"
 # shellcheck source=lib/system.sh
 source "$VPS_GUARD_ROOT/lib/system.sh"
+# shellcheck source=lib/preflight.sh
+source "$VPS_GUARD_ROOT/lib/preflight.sh"
 # shellcheck source=lib/ui.sh
 source "$VPS_GUARD_ROOT/lib/ui.sh"
 # shellcheck source=lib/backup.sh
@@ -64,6 +66,10 @@ main() {
     rollback)
       require_root
       rollback_cli "${@:2}"
+      ;;
+    preflight)
+      require_root
+      preflight_cli "${@:2}"
       ;;
     audit)
       require_root

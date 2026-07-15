@@ -17,11 +17,30 @@ test_root_user_can_run_status_from_menu() {
   write_stub id 'printf "0\n"'
   write_stub uname 'printf "x86_64\n"'
 
-  run_vps_guard_with_input $'5\n0\n'
+  run_vps_guard_with_input $'5\n1\n0\n0\n'
 
   assert_status 0
   assert_output_contains "5. 状态与诊断"
+  assert_output_contains "1. 系统状态"
   assert_output_contains "VPS Guard 系统状态"
+  assert_output_contains "已退出"
+}
+
+test_root_user_can_run_preflight_from_diagnostics_menu() {
+  setup_test_root
+  trap teardown_test_root RETURN
+
+  write_stub id 'printf "0\n"'
+  write_stub docker 'exit 0'
+  write_stub ps 'printf "dockerd /usr/bin/dockerd\n"'
+
+  run_vps_guard_with_input $'5\n2\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "状态与诊断"
+  assert_output_contains "2. 网络环境预检"
+  assert_output_contains "VPS Guard 网络环境预检（只读）"
+  assert_output_contains "容器运行时 Docker：运行中"
   assert_output_contains "已退出"
 }
 
@@ -43,4 +62,5 @@ test_root_user_can_open_backup_menu_and_list_snapshots() {
 }
 
 test_root_user_can_run_status_from_menu
+test_root_user_can_run_preflight_from_diagnostics_menu
 test_root_user_can_open_backup_menu_and_list_snapshots

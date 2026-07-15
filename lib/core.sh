@@ -5,6 +5,7 @@
 readonly EXIT_FAILURE=1
 # shellcheck disable=SC2034
 readonly EXIT_USAGE=2
+readonly EXIT_CONFLICT=3
 readonly EXIT_PERMISSION=4
 # shellcheck disable=SC2034
 readonly EXIT_UNSUPPORTED=5

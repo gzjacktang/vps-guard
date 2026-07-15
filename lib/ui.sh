@@ -48,7 +48,7 @@ show_main_menu() {
         return 0
         ;;
       5)
-        show_status
+        show_diagnostics_menu
         ;;
       6)
         show_backup_menu
@@ -59,6 +59,24 @@ show_main_menu() {
       *)
         printf '无效选项，请重新输入。\n'
         ;;
+    esac
+  done
+}
+
+show_diagnostics_menu() {
+  local choice
+  while true; do
+    printf '状态与诊断\n'
+    printf '1. 系统状态\n'
+    printf '2. 网络环境预检\n'
+    printf '0. 返回主菜单\n'
+    printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1) show_status || true ;;
+      2) show_preflight_report || true ;;
+      *) printf '无效选项，请重新输入。\n' ;;
     esac
   done
 }
@@ -124,5 +142,5 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|backup|rollback|audit|help]\n'
 }
