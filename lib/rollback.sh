@@ -249,6 +249,7 @@ run_rollback() {
 }
 
 run_rollback_hook() {
+  # 文件快照恢复不会自动改变内核中的 nftables 对象；防火墙事务必须额外同步运行时，避免磁盘已恢复但 SSH 仍被旧规则阻断。
   case "$1" in
     none | "") return 0 ;;
     firewall) reload_firewall_runtime ;;

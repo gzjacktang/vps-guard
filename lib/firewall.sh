@@ -50,6 +50,8 @@ current_ssh_ports() {
     error "无法读取 sshd 实际生效配置"
     return "$EXIT_FAILURE"
   fi
+  # sshd -T 表示重启后仍应保留的配置入口；SSH_CONNECTION 表示本次会话已经验证可用的实际入口。
+  # 迁移期间两者可能不同，必须取并集，不能用其中一个覆盖另一个。
   ports="$(printf '%s\n' "$effective" | awk '$1 == "port" { print $2 }' | sort -n -u | paste -sd, -)"
   [[ -n "$ports" ]] || {
     error "sshd 实际生效配置中没有端口"
@@ -175,6 +177,8 @@ validate_firewall_candidate() {
   local candidate="$1"
   local check_file status=0
   check_file="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-check.XXXXXX")" || return "$EXIT_FAILURE"
+  # 已加载自有表时，单独检查新的 table 声明会误报 File exists；检查完整替换事务才能模拟真实应用。
+  # `nft -c` 只校验不执行，因此这里的精确 delete 不会改变内核运行时。
   if nft list table inet vps_guard >/dev/null 2>&1; then
     printf 'delete table inet vps_guard\n' >"$check_file"
   else
@@ -211,6 +215,8 @@ ensure_firewall_scope_owned_or_free() {
   nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
   include_line="$(firewall_include_line)"
 
+  # 名称相同不代表归本工具所有；只有 root-only 状态文件才是删除或替换自有范围的凭据。
+  # 没有有效凭据时宁可阻断，也不能接管第三方恰好同名的表或配置。
   if [[ -e "$state_path" ]]; then
     if [[ -r "$state_path" && "$(firewall_state_value enabled)" == "1" ]]; then
       return 0
@@ -295,6 +301,7 @@ install_firewall_configuration() {
 reload_firewall_runtime() {
   local config_path
   config_path="$(firewall_config_path)"
+  # Debian 12 不支持较新的 destroy 语法；所有权检查完成后，只删除并重载这一张自有表。
   if nft list table inet vps_guard >/dev/null 2>&1; then
     nft delete table inet vps_guard || return "$EXIT_FAILURE"
   fi
