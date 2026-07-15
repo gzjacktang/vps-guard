@@ -36,6 +36,7 @@ run_vps_guard() {
     VPS_GUARD_DATA_DIR="$TEST_ROOT/data" \
     VPS_GUARD_AUDIT_LOG="$TEST_ROOT/log/audit.log" \
     VPS_GUARD_MANAGED_PATHS_FILE="$TEST_ROOT/managed-paths" \
+    VPS_GUARD_SSH_CONNECTION="${TEST_SSH_CONNECTION:-}" \
     SUDO_USER="${TEST_SUDO_USER:-}" \
     "$PROJECT_ROOT/vps-guard.sh" "$@" 2>&1)"
   COMMAND_STATUS=$?
@@ -53,6 +54,7 @@ run_vps_guard_with_input() {
     VPS_GUARD_DATA_DIR="$TEST_ROOT/data" \
     VPS_GUARD_AUDIT_LOG="$TEST_ROOT/log/audit.log" \
     VPS_GUARD_MANAGED_PATHS_FILE="$TEST_ROOT/managed-paths" \
+    VPS_GUARD_SSH_CONNECTION="${TEST_SSH_CONNECTION:-}" \
     SUDO_USER="${TEST_SUDO_USER:-}" \
     "$PROJECT_ROOT/vps-guard.sh" "$@" 2>&1)"
   COMMAND_STATUS=$?

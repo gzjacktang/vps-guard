@@ -10,6 +10,18 @@ vps-guard preflight
 
 只读检测 Docker、Podman、LXC、WireGuard、OpenVPN、Tailscale、常见控制面板、云代理、相关接口与监听端口，并检查 UFW、firewalld、iptables 和 nftables 管理状态。报告将结论区分为“事实”“待确认”和“阻断”。详细检测依据和安全边界见 [网络环境预检说明](PREFLIGHT.md)。
 
+## nftables 防火墙
+
+```text
+vps-guard firewall status
+vps-guard firewall enable [--tcp 端口列表] [--udp 端口列表] [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall open --ports 端口列表 --protocol tcp|udp|both [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall close --ports 端口列表 --protocol tcp|udp|both [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall disable [--rollback-minutes 3|5|10] [--yes]
+```
+
+基础端口只支持单值和逗号列表。所有写入先做冲突预检、规则摘要、语法检查和快照，并默认创建 5 分钟回滚。应用后必须从新 SSH 会话验证，再执行 `rollback confirm <令牌>`。完整规则、安全边界、兼容策略和恢复流程见 [nftables 防火墙说明](FIREWALL.md)。
+
 ## 快照
 
 ```text

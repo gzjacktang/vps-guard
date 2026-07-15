@@ -52,6 +52,8 @@ managed_paths() {
     '/etc/ssh/sshd_config' \
     '/etc/ssh/sshd_config.d' \
     '/etc/nftables.conf' \
+    '/etc/nftables.d/vps-guard.nft' \
+    '/etc/vps-guard/firewall.conf' \
     '/etc/fail2ban/jail.d/vps-guard.local'
 }
 
