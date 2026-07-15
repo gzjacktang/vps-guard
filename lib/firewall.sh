@@ -1,0 +1,695 @@
+#!/usr/bin/env bash
+
+firewall_config_path() {
+  printf '%s/etc/nftables.d/vps-guard.nft\n' "${VPS_GUARD_FS_ROOT:-}"
+}
+
+firewall_state_path() {
+  printf '%s/etc/vps-guard/firewall.conf\n' "${VPS_GUARD_FS_ROOT:-}"
+}
+
+normalize_basic_ports() {
+  local input="$1"
+  local compact port numeric seen=" "
+  local ports=()
+  compact="$(printf '%s' "$input" | tr -d '[:space:]')"
+  [[ -z "$compact" ]] && return 0
+  [[ "$compact" != ,* && "$compact" != *, && "$compact" != *,,* ]] || return "$EXIT_USAGE"
+
+  local old_ifs="$IFS"
+  IFS=,
+  for port in $compact; do
+    [[ "$port" =~ ^[0-9]{1,5}$ ]] || {
+      IFS="$old_ifs"
+      return "$EXIT_USAGE"
+    }
+    numeric=$((10#$port))
+    [[ "$numeric" -ge 1 && "$numeric" -le 65535 ]] || {
+      IFS="$old_ifs"
+      return "$EXIT_USAGE"
+    }
+    port="$numeric"
+    if [[ "$seen" != *" $port "* ]]; then
+      ports+=("$port")
+      seen+="$port "
+    fi
+  done
+  IFS="$old_ifs"
+  if [[ "${#ports[@]}" -gt 0 ]]; then
+    printf '%s\n' "${ports[@]}" | sort -n | paste -sd, -
+  fi
+}
+
+current_ssh_ports() {
+  local effective ports connection client_ip client_port server_ip server_port extra
+  command_exists sshd || {
+    error "无法检测当前 SSH 端口：缺少 sshd"
+    return "$EXIT_FAILURE"
+  }
+  if ! effective="$(sshd -T 2>/dev/null)"; then
+    error "无法读取 sshd 实际生效配置"
+    return "$EXIT_FAILURE"
+  fi
+  # sshd -T 表示重启后仍应保留的配置入口；SSH_CONNECTION 表示本次会话已经验证可用的实际入口。
+  # 迁移期间两者可能不同，必须取并集，不能用其中一个覆盖另一个。
+  ports="$(printf '%s\n' "$effective" | awk '$1 == "port" { print $2 }' | sort -n -u | paste -sd, -)"
+  [[ -n "$ports" ]] || {
+    error "sshd 实际生效配置中没有端口"
+    return "$EXIT_FAILURE"
+  }
+  ports="$(normalize_basic_ports "$ports")" || return $?
+
+  connection="${VPS_GUARD_SSH_CONNECTION:-${SSH_CONNECTION:-}}"
+  if [[ -n "$connection" ]]; then
+    read -r client_ip client_port server_ip server_port extra <<<"$connection"
+    if [[ -n "${extra:-}" || -z "${client_ip:-}" || -z "${server_ip:-}" ||
+      ! "${client_port:-}" =~ ^[0-9]+$ || ! "${server_port:-}" =~ ^[0-9]+$ ||
+      "$server_port" -lt 1 || "$server_port" -gt 65535 ]]; then
+      error "无法解析当前 SSH_CONNECTION，拒绝猜测已验证入口"
+      return "$EXIT_FAILURE"
+    fi
+    ports="$(merge_basic_ports "$ports" "$server_port")"
+  fi
+  printf '%s\n' "$ports"
+}
+
+comma_ports_to_nft_set() {
+  printf '%s' "$1" | sed 's/,/, /g'
+}
+
+merge_basic_ports() {
+  local first="$1"
+  local second="$2"
+  if [[ -n "$first" && -n "$second" ]]; then
+    normalize_basic_ports "$first,$second"
+  else
+    normalize_basic_ports "$first$second"
+  fi
+}
+
+remove_basic_ports() {
+  local existing="$1"
+  local removing="$2"
+  local port remove_port keep
+  local kept=()
+  local old_ifs="$IFS"
+  IFS=,
+  for port in $existing; do
+    keep=1
+    for remove_port in $removing; do
+      if [[ "$port" == "$remove_port" ]]; then
+        keep=0
+        break
+      fi
+    done
+    [[ "$keep" -eq 0 ]] || kept+=("$port")
+  done
+  IFS="$old_ifs"
+  if [[ "${#kept[@]}" -gt 0 ]]; then
+    normalize_basic_ports "$(
+      IFS=,
+      printf '%s' "${kept[*]}"
+    )"
+  fi
+}
+
+firewall_state_value() {
+  local key="$1"
+  local state_path
+  state_path="$(firewall_state_path)"
+  [[ -r "$state_path" ]] || return "$EXIT_FAILURE"
+  sed -n "s/^${key}=//p" "$state_path" | tail -1
+}
+
+require_firewall_enabled() {
+  local state_path
+  state_path="$(firewall_state_path)"
+  if [[ ! -r "$state_path" || "$(firewall_state_value enabled)" != "1" ]]; then
+    error "VPS Guard 防火墙尚未启用"
+    return "$EXIT_FAILURE"
+  fi
+}
+
+render_firewall_ruleset() {
+  local destination="$1"
+  local ssh_ports="$2"
+  local tcp_ports="$3"
+  local udp_ports="$4"
+  local all_tcp
+  all_tcp="$(merge_basic_ports "$ssh_ports" "$tcp_ports")"
+
+  {
+    printf 'table inet vps_guard {\n'
+    printf '  chain input {\n'
+    printf '    type filter hook input priority 0; policy drop;\n'
+    printf '    ct state established,related accept\n'
+    printf '    iifname "lo" accept\n'
+    printf '    ip protocol icmp accept\n'
+    printf '    meta l4proto ipv6-icmp accept\n'
+    [[ -z "$all_tcp" ]] || printf '    tcp dport { %s } accept\n' "$(comma_ports_to_nft_set "$all_tcp")"
+    [[ -z "$udp_ports" ]] || printf '    udp dport { %s } accept\n' "$(comma_ports_to_nft_set "$udp_ports")"
+    printf '  }\n'
+    printf '  chain output {\n'
+    printf '    type filter hook output priority 0; policy accept;\n'
+    printf '  }\n'
+    printf '}\n'
+  } >"$destination"
+}
+
+show_firewall_summary() {
+  local ssh_ports="$1"
+  local tcp_ports="$2"
+  local udp_ports="$3"
+  printf '防火墙规则摘要\n'
+  printf '地址族：IPv4 + IPv6（inet 双栈）\n'
+  printf '入站策略：默认拒绝\n'
+  printf '出站策略：默认允许\n'
+  printf '保留 SSH TCP：%s\n' "$ssh_ports"
+  printf '开放 TCP：%s\n' "${tcp_ports:-无额外端口}"
+  printf '开放 UDP：%s\n' "${udp_ports:-无}"
+  printf '已建立/相关连接、回环、ICMP 与 ICMPv6：允许\n'
+  printf '受管范围：仅 table inet vps_guard；不创建 FORWARD 或 NAT 链\n'
+  printf '最坏后果：SSH 连接中断，VPS 可能暂时失联。\n'
+  printf '操作前确认云控制台、串行控制台或救援模式可用。\n'
+}
+
+validate_firewall_candidate() {
+  local candidate="$1"
+  local check_file status=0
+  check_file="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-check.XXXXXX")" || return "$EXIT_FAILURE"
+  # 已加载自有表时，单独检查新的 table 声明会误报 File exists；检查完整替换事务才能模拟真实应用。
+  # `nft -c` 只校验不执行，因此这里的精确 delete 不会改变内核运行时。
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    printf 'delete table inet vps_guard\n' >"$check_file"
+  else
+    : >"$check_file"
+  fi
+  if ! cat "$candidate" >>"$check_file" || ! nft -c -f "$check_file"; then
+    status="$EXIT_FAILURE"
+  fi
+  rm -f "$check_file" || true
+  return "$status"
+}
+
+validate_rollback_minutes() {
+  case "$1" in
+    3 | 5 | 10) return 0 ;;
+    *)
+      error "回滚时间只允许 3、5 或 10 分钟"
+      return "$EXIT_USAGE"
+      ;;
+  esac
+}
+
+require_nft_command() {
+  if ! command_exists nft; then
+    error "缺少 nft 命令，请先安装 Debian/Ubuntu 官方 nftables 软件包"
+    return "$EXIT_FAILURE"
+  fi
+}
+
+ensure_firewall_scope_owned_or_free() {
+  local state_path config_path nftables_conf include_line
+  state_path="$(firewall_state_path)"
+  config_path="$(firewall_config_path)"
+  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
+  include_line="$(firewall_include_line)"
+
+  # 名称相同不代表归本工具所有；只有 root-only 状态文件才是删除或替换自有范围的凭据。
+  # 没有有效凭据时宁可阻断，也不能接管第三方恰好同名的表或配置。
+  if [[ -e "$state_path" ]]; then
+    if [[ -r "$state_path" && "$(firewall_state_value enabled)" == "1" ]]; then
+      return 0
+    fi
+    error "发现无效的 VPS Guard 防火墙状态文件：$state_path"
+    error "拒绝覆盖归属不明的防火墙范围"
+    return "$EXIT_CONFLICT"
+  fi
+
+  if [[ -e "$config_path" ]]; then
+    error "发现没有本工具状态记录的受管配置：$config_path"
+    error "拒绝覆盖归属不明的防火墙范围"
+    return "$EXIT_CONFLICT"
+  fi
+  if [[ -r "$nftables_conf" ]] && grep -Fqx "$include_line" "$nftables_conf"; then
+    error "发现没有本工具状态记录的 nftables include"
+    error "拒绝覆盖归属不明的防火墙范围"
+    return "$EXIT_CONFLICT"
+  fi
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    error "发现不属于本工具状态记录的 table inet vps_guard"
+    error "拒绝覆盖同名第三方范围"
+    return "$EXIT_CONFLICT"
+  fi
+}
+
+ensure_no_pending_firewall_rollback() {
+  local root state_file hook status token
+  root="$(rollback_root)"
+  [[ -d "$root" ]] || return 0
+  for state_file in "$root"/*/state; do
+    [[ -r "$state_file" ]] || continue
+    hook="$(read_state_value "$state_file" hook | tail -1)"
+    [[ "$hook" == "firewall" ]] || continue
+    status="$(read_state_value "$state_file" status | tail -1)"
+    case "$status" in
+      pending | running)
+        token="$(read_state_value "$state_file" token | tail -1)"
+        error "仍有等待确认的防火墙自动回滚：$token"
+        error "请先验证并确认，或等待其完成后再修改防火墙"
+        return "$EXIT_CONFLICT"
+        ;;
+    esac
+  done
+}
+
+firewall_include_line() {
+  printf 'include "/etc/nftables.d/vps-guard.nft" # vps-guard\n'
+}
+
+install_firewall_configuration() {
+  local candidate="$1"
+  local ssh_ports="$2"
+  local tcp_ports="$3"
+  local udp_ports="$4"
+  local config_path state_path nftables_conf include_line
+  config_path="$(firewall_config_path)"
+  state_path="$(firewall_state_path)"
+  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
+  include_line="$(firewall_include_line)"
+
+  umask 077
+  mkdir -p "$(dirname "$config_path")" "$(dirname "$state_path")" || return "$EXIT_FAILURE"
+  chmod 0700 "$(dirname "$state_path")" || return "$EXIT_FAILURE"
+  cp "$candidate" "$config_path" || return "$EXIT_FAILURE"
+  chmod 0600 "$config_path" || return "$EXIT_FAILURE"
+  if ! printf 'enabled=1\nssh_ports=%s\ntcp_ports=%s\nudp_ports=%s\n' \
+    "$ssh_ports" "$tcp_ports" "$udp_ports" >"$state_path"; then
+    return "$EXIT_FAILURE"
+  fi
+  chmod 0600 "$state_path" || return "$EXIT_FAILURE"
+
+  if [[ ! -e "$nftables_conf" ]]; then
+    mkdir -p "$(dirname "$nftables_conf")" || return "$EXIT_FAILURE"
+    printf '#!/usr/sbin/nft -f\n' >"$nftables_conf" || return "$EXIT_FAILURE"
+  fi
+  if ! grep -Fqx "$include_line" "$nftables_conf"; then
+    printf '\n%s\n' "$include_line" >>"$nftables_conf" || return "$EXIT_FAILURE"
+  fi
+}
+
+reload_firewall_runtime() {
+  local config_path
+  config_path="$(firewall_config_path)"
+  # Debian 12 不支持较新的 destroy 语法；所有权检查完成后，只删除并重载这一张自有表。
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    nft delete table inet vps_guard || return "$EXIT_FAILURE"
+  fi
+  if [[ -r "$config_path" ]]; then
+    nft -f "$config_path"
+    return $?
+  fi
+  return 0
+}
+
+restore_firewall_snapshot() {
+  local snapshot_id="$1"
+  restore_snapshot "$snapshot_id" 1 && reload_firewall_runtime
+}
+
+remove_firewall_configuration() {
+  local nftables_conf include_line temp mode
+  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
+  include_line="$(firewall_include_line)"
+
+  if [[ -e "$nftables_conf" ]]; then
+    temp="$(dirname "$nftables_conf")/.vps-guard-nftables.$$.tmp"
+    mode="$(file_mode "$nftables_conf")" || return "$EXIT_FAILURE"
+    if ! awk -v include_line="$include_line" '$0 != include_line { print }' "$nftables_conf" >"$temp" ||
+      ! chmod "$mode" "$temp" || ! mv "$temp" "$nftables_conf"; then
+      rm -f "$temp" || true
+      return "$EXIT_FAILURE"
+    fi
+  fi
+  rm -f "$(firewall_config_path)" "$(firewall_state_path)"
+}
+
+disable_firewall() {
+  local rollback_minutes="$1"
+  local confirmed="$2"
+  local cleanup snapshot_output snapshot_id rollback_output runtime_table_present=0
+
+  validate_rollback_minutes "$rollback_minutes" || return $?
+  if ! require_firewall_enabled 2>/dev/null; then
+    printf 'VPS Guard 防火墙已经停用，无需重复操作。\n'
+    return 0
+  fi
+  require_nft_command || return $?
+  ensure_firewall_scope_owned_or_free || return $?
+  ensure_no_pending_firewall_rollback || return $?
+  require_firewall_write_preflight || return $?
+
+  cleanup="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-disable.XXXXXX")" || return "$EXIT_FAILURE"
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    printf 'delete table inet vps_guard\n' >"$cleanup"
+    runtime_table_present=1
+  else
+    : >"$cleanup"
+  fi
+  printf '防火墙停用摘要\n'
+  if [[ "$runtime_table_present" -eq 1 ]]; then
+    printf '将删除：table inet vps_guard、受管配置和精确 include 行\n'
+  else
+    printf '运行时 table inet vps_guard 已不存在；将删除受管配置和精确 include 行\n'
+  fi
+  printf '保留：所有第三方 nftables 表、FORWARD、NAT、容器链和 VPN 配置\n'
+  printf '警告：所有端口将由其他防火墙和上游网络策略决定。\n'
+  printf '最坏后果：原本受拦截的服务可能暴露到公网。\n'
+  printf '操作前确认云控制台、串行控制台或救援模式可用。\n'
+  if ! nft -c -f "$cleanup"; then
+    rm -f "$cleanup" || true
+    error "nftables 停用语法检查失败，未写入任何配置"
+    return "$EXIT_FAILURE"
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$cleanup" || true
+    printf 'dry-run：不会删除规则或启动自动回滚。\n'
+    return 0
+  fi
+  if [[ "$confirmed" -ne 1 ]]; then
+    printf '确认停用并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+    IFS= read -r answer
+    case "$answer" in
+      y | Y | yes | YES) ;;
+      *)
+        rm -f "$cleanup" || true
+        printf '已取消，未停用防火墙。\n'
+        return 0
+        ;;
+    esac
+  fi
+
+  if ! snapshot_output="$(create_snapshot firewall-before-disable)"; then
+    rm -f "$cleanup" || true
+    error "创建防火墙快照失败，未停用规则"
+    return "$EXIT_FAILURE"
+  fi
+  printf '%s\n' "$snapshot_output"
+  snapshot_id="${snapshot_output#*快照已创建：}"
+  snapshot_id="${snapshot_id%%$'\n'*}"
+  if ! nft -f "$cleanup" || ! remove_firewall_configuration; then
+    rm -f "$cleanup" || true
+    restore_firewall_snapshot "$snapshot_id" || true
+    audit_event firewall.disable failure "snapshot=$snapshot_id reason=apply"
+    error "防火墙停用失败，已尝试恢复快照"
+    return "$EXIT_FAILURE"
+  fi
+  rm -f "$cleanup" || true
+  if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
+    restore_firewall_snapshot "$snapshot_id" || true
+    audit_event firewall.disable failure "snapshot=$snapshot_id reason=rollback-schedule"
+    error "无法安排自动回滚，已尝试恢复原防火墙"
+    return "$EXIT_FAILURE"
+  fi
+  printf '%s\n' "$rollback_output"
+  audit_event firewall.disable success "snapshot=$snapshot_id minutes=$rollback_minutes"
+  printf 'VPS Guard 防火墙已停用。所有端口将由其他防火墙和上游网络策略决定；确认正常后执行 rollback confirm。\n'
+}
+
+enable_firewall() {
+  local tcp_input="$1"
+  local udp_input="$2"
+  local rollback_minutes="$3"
+  local confirmed="$4"
+  local operation="${5:-enable}"
+  local tcp_ports udp_ports ssh_ports candidate snapshot_output snapshot_id rollback_output
+
+  validate_rollback_minutes "$rollback_minutes" || return $?
+  if ! tcp_ports="$(normalize_basic_ports "$tcp_input")"; then
+    error "TCP 端口只支持 1-65535 的单端口或逗号列表"
+    return "$EXIT_USAGE"
+  fi
+  if ! udp_ports="$(normalize_basic_ports "$udp_input")"; then
+    error "UDP 端口只支持 1-65535 的单端口或逗号列表"
+    return "$EXIT_USAGE"
+  fi
+  require_nft_command || return $?
+  ensure_firewall_scope_owned_or_free || return $?
+  ensure_no_pending_firewall_rollback || return $?
+  require_firewall_write_preflight || return $?
+  ssh_ports="$(current_ssh_ports)" || return $?
+  candidate="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall.XXXXXX")" || return "$EXIT_FAILURE"
+  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports"; then
+    rm -f "$candidate" || true
+    error "无法生成 nftables 候选配置"
+    return "$EXIT_FAILURE"
+  fi
+
+  show_firewall_summary "$ssh_ports" "$tcp_ports" "$udp_ports"
+  if ! validate_firewall_candidate "$candidate"; then
+    rm -f "$candidate" || true
+    error "nftables 语法检查失败，未写入任何配置"
+    return "$EXIT_FAILURE"
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$candidate" || true
+    printf 'dry-run：不会写入配置或启动自动回滚。\n'
+    return 0
+  fi
+
+  if [[ "$confirmed" -ne 1 ]]; then
+    printf '警告：本操作会重载入站规则。确认按上述摘要写入并启动 %s 分钟回滚？[y/N] ' "$rollback_minutes"
+    IFS= read -r answer
+    case "$answer" in
+      y | Y | yes | YES) ;;
+      *)
+        rm -f "$candidate" || true
+        printf '已取消，未写入防火墙。\n'
+        return 0
+        ;;
+    esac
+  fi
+
+  if ! snapshot_output="$(create_snapshot "firewall-before-$operation")"; then
+    rm -f "$candidate" || true
+    error "创建防火墙快照失败，未写入规则"
+    return "$EXIT_FAILURE"
+  fi
+  printf '%s\n' "$snapshot_output"
+  snapshot_id="${snapshot_output#*快照已创建：}"
+  snapshot_id="${snapshot_id%%$'\n'*}"
+
+  if ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
+    ! reload_firewall_runtime; then
+    rm -f "$candidate" || true
+    restore_firewall_snapshot "$snapshot_id" || true
+    audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=apply"
+    error "防火墙应用失败，已尝试恢复快照"
+    return "$EXIT_FAILURE"
+  fi
+  rm -f "$candidate" || true
+
+  if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
+    restore_firewall_snapshot "$snapshot_id" || true
+    audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=rollback-schedule"
+    error "无法安排自动回滚，已尝试恢复原防火墙"
+    return "$EXIT_FAILURE"
+  fi
+  printf '%s\n' "$rollback_output"
+  audit_event "firewall.$operation" success "snapshot=$snapshot_id minutes=$rollback_minutes"
+  case "$operation" in
+    enable) printf '防火墙已启用。' ;;
+    open) printf '端口放行规则已更新。' ;;
+    close) printf '端口放行规则已关闭。' ;;
+  esac
+  printf '请从新 SSH 会话验证端口 %s 和业务服务，确认正常后执行 rollback confirm。\n' "$ssh_ports"
+}
+
+change_firewall_ports() {
+  local mode="$1"
+  local ports_input="$2"
+  local protocol="$3"
+  local rollback_minutes="$4"
+  local confirmed="$5"
+  local ports tcp_ports udp_ports new_tcp new_udp
+
+  require_firewall_enabled || return $?
+  if ! ports="$(normalize_basic_ports "$ports_input")" || [[ -z "$ports" ]]; then
+    error "端口只支持 1-65535 的单端口或逗号列表"
+    return "$EXIT_USAGE"
+  fi
+  case "$protocol" in
+    tcp | udp | both) ;;
+    *)
+      error "协议只允许 tcp、udp 或 both"
+      return "$EXIT_USAGE"
+      ;;
+  esac
+  tcp_ports="$(firewall_state_value tcp_ports)"
+  udp_ports="$(firewall_state_value udp_ports)"
+  new_tcp="$tcp_ports"
+  new_udp="$udp_ports"
+
+  if [[ "$mode" == "open" ]]; then
+    if [[ "$protocol" == "tcp" || "$protocol" == "both" ]]; then
+      new_tcp="$(merge_basic_ports "$tcp_ports" "$ports")"
+    fi
+    if [[ "$protocol" == "udp" || "$protocol" == "both" ]]; then
+      new_udp="$(merge_basic_ports "$udp_ports" "$ports")"
+    fi
+    if [[ "$new_tcp" == "$tcp_ports" && "$new_udp" == "$udp_ports" ]]; then
+      printf '指定端口已经开放，无需重复操作。\n'
+      return 0
+    fi
+  else
+    if [[ "$protocol" == "tcp" || "$protocol" == "both" ]]; then
+      new_tcp="$(remove_basic_ports "$tcp_ports" "$ports")"
+    fi
+    if [[ "$protocol" == "udp" || "$protocol" == "both" ]]; then
+      new_udp="$(remove_basic_ports "$udp_ports" "$ports")"
+    fi
+    if [[ "$new_tcp" == "$tcp_ports" && "$new_udp" == "$udp_ports" ]]; then
+      printf '指定端口已经关闭，无需重复操作。\n'
+      return 0
+    fi
+  fi
+
+  enable_firewall "$new_tcp" "$new_udp" "$rollback_minutes" "$confirmed" "$mode"
+}
+
+show_firewall_status() {
+  local state_path ssh_ports tcp_ports udp_ports
+  state_path="$(firewall_state_path)"
+  require_nft_command || return $?
+  printf 'VPS Guard 防火墙状态\n'
+  if [[ ! -r "$state_path" || "$(firewall_state_value enabled)" != "1" ]]; then
+    printf '磁盘配置：未启用\n'
+    if nft list table inet vps_guard >/dev/null 2>&1; then
+      printf '内核运行时：发现孤立的 table inet vps_guard，请先检查再处理。\n'
+      return "$EXIT_FAILURE"
+    fi
+    printf '内核运行时：未加载\n'
+    printf '公网可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
+    return 0
+  fi
+
+  ssh_ports="$(firewall_state_value ssh_ports)"
+  tcp_ports="$(firewall_state_value tcp_ports)"
+  udp_ports="$(firewall_state_value udp_ports)"
+  printf '磁盘配置：已启用\n'
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    printf '内核运行时：已加载 table inet vps_guard\n'
+  else
+    printf '内核运行时：未加载，与磁盘配置不一致\n'
+    return "$EXIT_FAILURE"
+  fi
+  printf '受保护 SSH TCP：%s\n' "$ssh_ports"
+  printf '额外 TCP：%s\n' "${tcp_ports:-无}"
+  printf '额外 UDP：%s\n' "${udp_ports:-无}"
+  printf '公网可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
+}
+
+firewall_cli() {
+  local action="${1:-}"
+  local tcp_ports="" udp_ports="" ports="" protocol="" rollback_minutes=5 confirmed=0
+  case "$action" in
+    enable)
+      shift
+      while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+          --tcp)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            tcp_ports="$2"
+            shift 2
+            ;;
+          --udp)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            udp_ports="$2"
+            shift 2
+            ;;
+          --rollback-minutes)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            rollback_minutes="$2"
+            shift 2
+            ;;
+          --yes)
+            confirmed=1
+            shift
+            ;;
+          *)
+            error "firewall enable 未知参数：$1"
+            return "$EXIT_USAGE"
+            ;;
+        esac
+      done
+      enable_firewall "$tcp_ports" "$udp_ports" "$rollback_minutes" "$confirmed"
+      ;;
+    open | close)
+      shift
+      while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+          --ports)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            ports="$2"
+            shift 2
+            ;;
+          --protocol)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            protocol="$2"
+            shift 2
+            ;;
+          --rollback-minutes)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            rollback_minutes="$2"
+            shift 2
+            ;;
+          --yes)
+            confirmed=1
+            shift
+            ;;
+          *)
+            error "firewall $action 未知参数：$1"
+            return "$EXIT_USAGE"
+            ;;
+        esac
+      done
+      [[ -n "$ports" && -n "$protocol" ]] || {
+        error "用法：vps-guard firewall $action --ports 列表 --protocol tcp|udp|both"
+        return "$EXIT_USAGE"
+      }
+      change_firewall_ports "$action" "$ports" "$protocol" "$rollback_minutes" "$confirmed"
+      ;;
+    disable)
+      shift
+      while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+          --rollback-minutes)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            rollback_minutes="$2"
+            shift 2
+            ;;
+          --yes)
+            confirmed=1
+            shift
+            ;;
+          *)
+            error "firewall disable 未知参数：$1"
+            return "$EXIT_USAGE"
+            ;;
+        esac
+      done
+      disable_firewall "$rollback_minutes" "$confirmed"
+      ;;
+    status)
+      [[ "$#" -eq 1 ]] || {
+        error "firewall status 不接受额外参数"
+        return "$EXIT_USAGE"
+      }
+      show_firewall_status
+      ;;
+    *)
+      error "用法：vps-guard firewall <enable|disable|open|close|status>"
+      return "$EXIT_USAGE"
+      ;;
+  esac
+}

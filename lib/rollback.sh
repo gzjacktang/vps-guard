@@ -51,12 +51,20 @@ release_rollback_lock() {
 start_rollback() {
   local snapshot_id="$1"
   local minutes="$2"
+  local hook="${3:-none}"
   local snapshot_dir token state_dir unit command_path
 
   case "$minutes" in
     3 | 5 | 10) ;;
     *)
       error "回滚时间只允许 3、5 或 10 分钟"
+      return "$EXIT_USAGE"
+      ;;
+  esac
+  case "$hook" in
+    none | firewall) ;;
+    *)
+      error "不支持的回滚钩子：$hook"
       return "$EXIT_USAGE"
       ;;
   esac
@@ -78,8 +86,8 @@ start_rollback() {
 
   state_dir="$(rollback_state_dir "$token")"
   umask 077
-  if ! mkdir -p "$state_dir" || ! printf 'token=%s\nsnapshot=%s\nminutes=%s\nunit=%s\nstatus=pending\n' \
-    "$token" "$snapshot_id" "$minutes" "$unit" >"$state_dir/state"; then
+  if ! mkdir -p "$state_dir" || ! printf 'token=%s\nsnapshot=%s\nminutes=%s\nunit=%s\nhook=%s\nstatus=pending\n' \
+    "$token" "$snapshot_id" "$minutes" "$unit" "$hook" >"$state_dir/state"; then
     audit_event rollback.start failure "token=$token snapshot=$snapshot_id reason=state-write"
     error "无法写入自动回滚状态"
     return "$EXIT_FAILURE"
@@ -175,7 +183,7 @@ confirm_rollback() {
 
 run_rollback() {
   local token="$1"
-  local state_dir state_file status snapshot
+  local state_dir state_file status snapshot hook
   state_dir="$(rollback_state_dir "$token")" || return $?
   state_file="$state_dir/state"
   [[ -r "$state_file" ]] || {
@@ -213,13 +221,15 @@ run_rollback() {
   esac
 
   snapshot="$(read_state_value "$state_file" snapshot | tail -1)"
+  hook="$(read_state_value "$state_file" hook | tail -1)"
+  hook="${hook:-none}"
   if ! printf 'status=running\n' >>"$state_file"; then
     audit_event rollback.run failure "token=$token snapshot=$snapshot reason=state-write"
     release_rollback_lock "$state_dir"
     error "无法写入回滚运行状态"
     return "$EXIT_FAILURE"
   fi
-  if restore_snapshot "$snapshot" 1; then
+  if restore_snapshot "$snapshot" 1 && run_rollback_hook "$hook"; then
     if ! printf 'status=rolled-back\nfinished=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$state_file"; then
       audit_event rollback.run failure "token=$token snapshot=$snapshot reason=state-write-after-restore"
       release_rollback_lock "$state_dir"
@@ -236,6 +246,18 @@ run_rollback() {
     error "自动回滚失败：$token"
     return "$EXIT_FAILURE"
   fi
+}
+
+run_rollback_hook() {
+  # 文件快照恢复不会自动改变内核中的 nftables 对象；防火墙事务必须额外同步运行时，避免磁盘已恢复但 SSH 仍被旧规则阻断。
+  case "$1" in
+    none | "") return 0 ;;
+    firewall) reload_firewall_runtime ;;
+    *)
+      error "无法执行未知回滚钩子：$1"
+      return "$EXIT_FAILURE"
+      ;;
+  esac
 }
 
 rollback_cli() {

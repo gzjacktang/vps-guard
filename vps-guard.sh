@@ -18,6 +18,8 @@ source "$VPS_GUARD_ROOT/lib/ui.sh"
 source "$VPS_GUARD_ROOT/lib/backup.sh"
 # shellcheck source=lib/rollback.sh
 source "$VPS_GUARD_ROOT/lib/rollback.sh"
+# shellcheck source=lib/firewall.sh
+source "$VPS_GUARD_ROOT/lib/firewall.sh"
 
 DRY_RUN=0
 
@@ -70,6 +72,10 @@ main() {
     preflight)
       require_root
       preflight_cli "${@:2}"
+      ;;
+    firewall)
+      require_root
+      firewall_cli "${@:2}"
       ;;
     audit)
       require_root

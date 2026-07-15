@@ -61,6 +61,31 @@ test_root_user_can_open_backup_menu_and_list_snapshots() {
   assert_output_contains "已退出"
 }
 
+test_root_user_can_open_firewall_menu_and_view_status() {
+  setup_test_root
+  trap teardown_test_root RETURN
+
+  mkdir -p "$TEST_ROOT/fs/etc/vps-guard"
+  printf '%s\n' 'enabled=1' 'ssh_ports=22' 'tcp_ports=80' 'udp_ports=' >"$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
+  write_stub id 'printf "0\n"'
+  write_stub nft '
+if [[ "$*" == "list table inet vps_guard" ]]; then
+  exit 0
+fi
+exit 0
+'
+
+  run_vps_guard_with_input $'3\n1\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "防火墙管理"
+  assert_output_contains "1. 查看状态"
+  assert_output_contains "磁盘配置：已启用"
+  assert_output_contains "受保护 SSH TCP：22"
+  assert_output_contains "已退出"
+}
+
 test_root_user_can_run_status_from_menu
 test_root_user_can_run_preflight_from_diagnostics_menu
 test_root_user_can_open_backup_menu_and_list_snapshots
+test_root_user_can_open_firewall_menu_and_view_status

@@ -50,15 +50,66 @@ show_main_menu() {
       5)
         show_diagnostics_menu
         ;;
+      3)
+        show_firewall_menu
+        ;;
       6)
         show_backup_menu
         ;;
-      1 | 2 | 3 | 4 | 7)
+      1 | 2 | 4 | 7)
         printf '该功能将在后续实施切片中提供。\n'
         ;;
       *)
         printf '无效选项，请重新输入。\n'
         ;;
+    esac
+  done
+}
+
+show_firewall_menu() {
+  local choice ports protocol tcp_ports udp_ports minutes
+  while true; do
+    printf '防火墙管理\n'
+    printf '1. 查看状态\n'
+    printf '2. 启用安全基线\n'
+    printf '3. 开放基础端口\n'
+    printf '4. 关闭基础端口\n'
+    printf '5. 停用 VPS Guard 防火墙\n'
+    printf '0. 返回主菜单\n'
+    printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1) show_firewall_status || true ;;
+      2)
+        printf '额外 TCP 端口（逗号列表，可留空）：'
+        IFS= read -r tcp_ports || return 0
+        printf '额外 UDP 端口（逗号列表，可留空）：'
+        IFS= read -r udp_ports || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        enable_firewall "$tcp_ports" "$udp_ports" "${minutes:-5}" 0 || true
+        ;;
+      3 | 4)
+        printf '端口（单个或逗号列表）：'
+        IFS= read -r ports || return 0
+        printf '协议 [tcp/udp/both]：'
+        IFS= read -r protocol || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        if [[ "$choice" == "3" ]]; then
+          change_firewall_ports open "$ports" "$protocol" "${minutes:-5}" 0 || true
+        else
+          change_firewall_ports close "$ports" "$protocol" "${minutes:-5}" 0 || true
+        fi
+        ;;
+      5)
+        printf '警告：停用后 VPS Guard 不再过滤任何端口。\n'
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        disable_firewall "${minutes:-5}" 0 || true
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
     esac
   done
 }
@@ -142,5 +193,5 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|preflight|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|firewall|backup|rollback|audit|help]\n'
 }
