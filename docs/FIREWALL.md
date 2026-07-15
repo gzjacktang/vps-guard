@@ -91,7 +91,7 @@ sudo vps-guard firewall disable --rollback-minutes 5
 3. 检查是否已有等待确认的防火墙事务；有则返回退出码 3。
 4. 运行只读环境预检；冲突管理器或不可读状态返回退出码 3。
 5. 生成完整候选规则并展示摘要。
-6. 使用 `nft -c -f` 做语法检查；失败时零写入。
+6. 使用 `nft -c -f` 检查完整事务；已有自有表时，校验输入会先精确删除旧表再声明候选表，但检查模式不会实际修改内核。失败时零写入。
 7. 要求用户确认。
 8. 创建受管配置快照。
 9. 只替换自有表和受管文件。
@@ -102,7 +102,7 @@ sudo vps-guard firewall disable --rollback-minutes 5
 
 ## 最低版本兼容
 
-Debian 12 的 nftables 还没有较新版本的 `destroy table` 语法，因此规则文件不使用该命令。通过所有权检查后，工具才用 `nft list table inet vps_guard` 只读判断已登记的自有表是否存在，仅在存在时执行精确的 `nft delete table inet vps_guard`，随后加载候选文件。此流程不会触碰其他表，并兼容当前支持矩阵的最低版本。
+Debian 12 的 nftables 还没有较新版本的 `destroy table` 语法，因此规则文件不使用该命令。通过所有权检查后，工具才用 `nft list table inet vps_guard` 只读判断已登记的自有表是否存在，仅在存在时执行精确的 `nft delete table inet vps_guard`，随后加载候选文件。语法检查使用同样的完整事务，避免已存在的自有表造成虚假的 `File exists`；`nft -c` 本身不执行变更。此流程不会触碰其他表，并兼容当前支持矩阵的最低版本。
 
 持久配置通过 `/etc/nftables.conf` 的精确 include 生效。真实发布验收必须在隔离虚拟机中验证 nftables 服务重载和重启后的规则状态；容器或命令桩测试不能替代内核 Netfilter 验收。
 

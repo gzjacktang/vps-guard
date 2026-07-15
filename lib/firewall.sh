@@ -169,6 +169,22 @@ show_firewall_summary() {
   printf '受管范围：仅 table inet vps_guard；不创建 FORWARD 或 NAT 链\n'
 }
 
+validate_firewall_candidate() {
+  local candidate="$1"
+  local check_file status=0
+  check_file="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-check.XXXXXX")" || return "$EXIT_FAILURE"
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    printf 'delete table inet vps_guard\n' >"$check_file"
+  else
+    : >"$check_file"
+  fi
+  if ! cat "$candidate" >>"$check_file" || ! nft -c -f "$check_file"; then
+    status="$EXIT_FAILURE"
+  fi
+  rm -f "$check_file" || true
+  return "$status"
+}
+
 validate_rollback_minutes() {
   case "$1" in
     3 | 5 | 10) return 0 ;;
@@ -312,7 +328,7 @@ remove_firewall_configuration() {
 disable_firewall() {
   local rollback_minutes="$1"
   local confirmed="$2"
-  local cleanup snapshot_output snapshot_id rollback_output
+  local cleanup snapshot_output snapshot_id rollback_output runtime_table_present=0
 
   validate_rollback_minutes "$rollback_minutes" || return $?
   if ! require_firewall_enabled 2>/dev/null; then
@@ -325,9 +341,18 @@ disable_firewall() {
   require_firewall_write_preflight || return $?
 
   cleanup="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-disable.XXXXXX")" || return "$EXIT_FAILURE"
-  printf 'delete table inet vps_guard\n' >"$cleanup"
+  if nft list table inet vps_guard >/dev/null 2>&1; then
+    printf 'delete table inet vps_guard\n' >"$cleanup"
+    runtime_table_present=1
+  else
+    : >"$cleanup"
+  fi
   printf '防火墙停用摘要\n'
-  printf '将删除：table inet vps_guard、受管配置和精确 include 行\n'
+  if [[ "$runtime_table_present" -eq 1 ]]; then
+    printf '将删除：table inet vps_guard、受管配置和精确 include 行\n'
+  else
+    printf '运行时 table inet vps_guard 已不存在；将删除受管配置和精确 include 行\n'
+  fi
   printf '保留：所有第三方 nftables 表、FORWARD、NAT、容器链和 VPN 配置\n'
   printf '警告：所有端口将由其他防火墙和上游网络策略决定。\n'
   if ! nft -c -f "$cleanup"; then
@@ -410,7 +435,7 @@ enable_firewall() {
   fi
 
   show_firewall_summary "$ssh_ports" "$tcp_ports" "$udp_ports"
-  if ! nft -c -f "$candidate"; then
+  if ! validate_firewall_candidate "$candidate"; then
     rm -f "$candidate" || true
     error "nftables 语法检查失败，未写入任何配置"
     return "$EXIT_FAILURE"

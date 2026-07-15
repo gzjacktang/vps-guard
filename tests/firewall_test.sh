@@ -305,6 +305,32 @@ test_firewall_open_and_close_basic_ports_are_idempotent() {
   [[ "$run_count" -eq 2 ]]
 }
 
+test_firewall_update_syntax_check_accounts_for_existing_managed_table() {
+  setup_firewall_test
+  trap teardown_test_root RETURN
+  seed_enabled_firewall
+  write_stub nft "
+printf '%s\\n' \"\$*\" >>'$TEST_ROOT/nft.log'
+if [[ \"\$*\" == 'list table inet vps_guard' ]]; then
+  exit 0
+fi
+if [[ \"\$1 \${2:-}\" == 'list ruleset' ]]; then
+  exit 0
+fi
+if [[ \"\$1 \${2:-}\" == '-c -f' ]]; then
+  first=\$(sed -n '1p' \"\$3\")
+  [[ \"\$first\" == 'delete table inet vps_guard' ]]
+  exit \$?
+fi
+exit 0
+"
+
+  run_vps_guard --dry-run firewall open --ports 443 --protocol tcp --yes
+
+  assert_status 0
+  assert_output_contains "dry-run：不会写入配置或启动自动回滚"
+}
+
 test_firewall_disable_removes_only_managed_scope_with_rollback() {
   local token
   setup_firewall_test
@@ -333,6 +359,35 @@ test_firewall_disable_removes_only_managed_scope_with_rollback() {
   run_vps_guard firewall disable --yes
   assert_status 0
   assert_output_contains "VPS Guard 防火墙已经停用"
+}
+
+test_firewall_disable_succeeds_when_managed_runtime_table_is_already_absent() {
+  setup_firewall_test
+  trap teardown_test_root RETURN
+  seed_enabled_firewall
+  write_stub systemd-run 'exit 0'
+  write_stub nft "
+if [[ \"\$*\" == 'list table inet vps_guard' ]]; then
+  exit 1
+fi
+if [[ \"\$1 \${2:-}\" == 'list ruleset' ]]; then
+  exit 0
+fi
+if [[ \"\$1 \${2:-}\" == '-c -f' || \"\$1\" == '-f' ]]; then
+  if grep -q 'delete table inet vps_guard' \"\${3:-\${2:-}}\"; then
+    exit 1
+  fi
+  exit 0
+fi
+exit 0
+"
+
+  run_vps_guard firewall disable --yes
+
+  assert_status 0
+  assert_output_contains "VPS Guard 防火墙已停用"
+  [[ ! -e "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft" ]]
+  [[ ! -e "$TEST_ROOT/fs/etc/vps-guard/firewall.conf" ]]
 }
 
 test_firewall_status_reports_configured_and_runtime_state() {
@@ -490,7 +545,9 @@ test_firewall_timeout_rollback_restores_files_and_runtime_table
 test_firewall_apply_failure_restores_snapshot_immediately
 test_firewall_rollback_schedule_failure_restores_immediately
 test_firewall_open_and_close_basic_ports_are_idempotent
+test_firewall_update_syntax_check_accounts_for_existing_managed_table
 test_firewall_disable_removes_only_managed_scope_with_rollback
+test_firewall_disable_succeeds_when_managed_runtime_table_is_already_absent
 test_firewall_status_reports_configured_and_runtime_state
 test_firewall_conflict_is_blocked_before_snapshot_or_write
 test_firewall_refuses_unowned_vps_guard_table_name_collision
