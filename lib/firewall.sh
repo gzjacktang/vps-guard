@@ -167,6 +167,8 @@ show_firewall_summary() {
   printf '开放 UDP：%s\n' "${udp_ports:-无}"
   printf '已建立/相关连接、回环、ICMP 与 ICMPv6：允许\n'
   printf '受管范围：仅 table inet vps_guard；不创建 FORWARD 或 NAT 链\n'
+  printf '最坏后果：SSH 连接中断，VPS 可能暂时失联。\n'
+  printf '操作前确认云控制台、串行控制台或救援模式可用。\n'
 }
 
 validate_firewall_candidate() {
@@ -355,6 +357,8 @@ disable_firewall() {
   fi
   printf '保留：所有第三方 nftables 表、FORWARD、NAT、容器链和 VPN 配置\n'
   printf '警告：所有端口将由其他防火墙和上游网络策略决定。\n'
+  printf '最坏后果：原本受拦截的服务可能暴露到公网。\n'
+  printf '操作前确认云控制台、串行控制台或救援模式可用。\n'
   if ! nft -c -f "$cleanup"; then
     rm -f "$cleanup" || true
     error "nftables 停用语法检查失败，未写入任何配置"

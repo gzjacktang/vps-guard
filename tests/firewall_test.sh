@@ -59,6 +59,8 @@ test_firewall_enable_dry_run_shows_checked_dual_stack_baseline_without_writes() 
   assert_output_contains "开放 TCP：80,443"
   assert_output_contains "开放 UDP：53"
   assert_output_contains "已建立/相关连接、回环、ICMP 与 ICMPv6：允许"
+  assert_output_contains "最坏后果：SSH 连接中断，VPS 可能暂时失联"
+  assert_output_contains "操作前确认云控制台、串行控制台或救援模式可用"
   assert_output_contains "dry-run：不会写入配置或启动自动回滚"
   grep -q -- '^-c -f ' "$TEST_ROOT/nft.log"
   [[ ! -e "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft" ]]
@@ -344,6 +346,7 @@ test_firewall_disable_removes_only_managed_scope_with_rollback() {
   assert_status 0
   assert_output_contains "VPS Guard 防火墙已停用"
   assert_output_contains "所有端口将由其他防火墙和上游网络策略决定"
+  assert_output_contains "最坏后果：原本受拦截的服务可能暴露到公网"
   [[ ! -e "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/vps-guard/firewall.conf" ]]
   if grep -q 'include "/etc/nftables.d/vps-guard.nft"' "$TEST_ROOT/fs/etc/nftables.conf"; then
