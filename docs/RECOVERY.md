@@ -69,3 +69,15 @@ sudo nft delete table inet vps_guard
 ```
 
 之后从已知快照恢复持久文件。第三方表、容器链、FORWARD 和 NAT 不属于 VPS Guard 的恢复范围。
+
+## Fail2ban 恢复
+
+应用、停用或选择性恢复 Fail2ban 后，先保持当前 SSH 会话，从另一终端验证公钥登录及 `fail2ban status`，再确认输出的普通回滚令牌。若新会话失败，不要确认，等待自动恢复。
+
+只恢复 VPS Guard 自有 jail，而不覆盖第三方 jail：
+
+```bash
+sudo vps-guard fail2ban restore <已知快照ID> --rollback-minutes 5
+```
+
+如果 Fail2ban 无法启动，进入服务商控制台查看 `fail2ban-client -t`、`systemctl status fail2ban` 和审计日志。不要删除整个 `/etc/fail2ban`；`fail2ban disable` 也只删除 `/etc/fail2ban/jail.d/vps-guard.local`。详见 [Fail2ban SSH 防护](FAIL2BAN.md)。

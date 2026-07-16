@@ -24,6 +24,8 @@ source "$VPS_GUARD_ROOT/lib/firewall.sh"
 source "$VPS_GUARD_ROOT/lib/ssh.sh"
 # shellcheck source=lib/ssh_hardening.sh
 source "$VPS_GUARD_ROOT/lib/ssh_hardening.sh"
+# shellcheck source=lib/fail2ban.sh
+source "$VPS_GUARD_ROOT/lib/fail2ban.sh"
 
 DRY_RUN=0
 
@@ -84,6 +86,10 @@ main() {
     ssh)
       require_root
       ssh_cli "${@:2}"
+      ;;
+    fail2ban)
+      require_root
+      fail2ban_cli "${@:2}"
       ;;
     audit)
       require_root

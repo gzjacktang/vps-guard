@@ -26,7 +26,8 @@ setup_ssh_test() {
     '/etc/vps-guard/ssh.conf' \
     '/etc/nftables.conf' \
     '/etc/nftables.d/vps-guard.nft' \
-    '/etc/vps-guard/firewall.conf' >"$TEST_ROOT/managed-paths"
+    '/etc/vps-guard/firewall.conf' \
+    '/etc/fail2ban/jail.d/vps-guard.local' >"$TEST_ROOT/managed-paths"
   write_stub id 'printf "0\n"'
   write_stub sshd "
 if [[ \"\$1\" == '-t' ]]; then
@@ -134,6 +135,31 @@ test_ssh_migration_keeps_old_port_until_new_session_commits_once() {
   run_vps_guard ssh confirm "$token"
   assert_status 0
   assert_output_contains "已经提交，无需重复确认"
+}
+
+test_ssh_migration_keeps_fail2ban_ports_in_sync() {
+  local token config
+  setup_ssh_test
+  trap teardown_test_root RETURN
+  mkdir -p "$TEST_ROOT/fs/etc/fail2ban/jail.d"
+  config="$TEST_ROOT/fs/etc/fail2ban/jail.d/vps-guard.local"
+  printf '# 由 VPS Guard 管理；请勿在此文件中保存私密信息\n[sshd]\nenabled = true\nport = 22\n' >"$config"
+  chmod 0600 "$config"
+  write_stub fail2ban-client "printf '%s\\n' \"\$*\" >>'$TEST_ROOT/fail2ban-client.log'; exit 0"
+
+  run_vps_guard ssh migrate --port 2222 --yes
+
+  assert_status 0
+  grep -q '^port = 22,2222$' "$config"
+  token="${COMMAND_OUTPUT#*SSH 迁移等待新会话确认：}"
+  token="${token%%$'\n'*}"
+
+  TEST_SSH_CONNECTION="198.51.100.10 50001 203.0.113.20 2222"
+  run_vps_guard ssh confirm "$token"
+
+  assert_status 0
+  grep -q '^port = 2222$' "$config"
+  [[ "$(grep -c '^restart fail2ban$' "$TEST_ROOT/systemctl.log")" -eq 2 ]]
 }
 
 test_ssh_migration_reloads_ubuntu_socket_activation_generator() {
@@ -463,6 +489,7 @@ test_ssh_restore_treats_a_missing_dropin_directory_as_an_empty_exact_set() {
 
 test_ssh_migration_dry_run_shows_two_phase_plan_without_writes
 test_ssh_migration_keeps_old_port_until_new_session_commits_once
+test_ssh_migration_keeps_fail2ban_ports_in_sync
 test_ssh_migration_reloads_ubuntu_socket_activation_generator
 test_ssh_syntax_failure_restores_original_files_and_cancels_timer
 test_ssh_rollback_schedule_failure_leaves_configuration_untouched

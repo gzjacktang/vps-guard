@@ -166,7 +166,7 @@ start_rollback() {
       ;;
   esac
   case "$hook" in
-    none | firewall | ssh-firewall | ssh-restore | ssh-hardening) ;;
+    none | firewall | ssh-firewall | ssh-restore | ssh-hardening | fail2ban) ;;
     *)
       error "不支持的回滚钩子：$hook"
       return "$EXIT_USAGE"
@@ -388,12 +388,14 @@ run_rollback_hook() {
     none | "") return 0 ;;
     firewall) reload_firewall_runtime ;;
     ssh-firewall | ssh-restore)
-      local firewall_status=0 ssh_status=0
+      local firewall_status=0 ssh_status=0 fail2ban_status=0
       reload_firewall_runtime || firewall_status=$?
       reload_sshd_runtime || ssh_status=$?
-      [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 ]]
+      reload_fail2ban_if_managed || fail2ban_status=$?
+      [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 && "$fail2ban_status" -eq 0 ]]
       ;;
     ssh-hardening) reload_sshd_runtime ;;
+    fail2ban) systemctl restart fail2ban ;;
     *)
       error "无法执行未知回滚钩子：$1"
       return "$EXIT_FAILURE"
