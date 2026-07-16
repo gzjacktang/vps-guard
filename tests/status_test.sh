@@ -46,7 +46,7 @@ test_status_only_proposes_missing_dependencies() {
 
   assert_status 0
   assert_output_contains "依赖 nft：缺失"
-  assert_output_contains "建议安装：sudo apt-get install nftables openssh-server fail2ban"
+  assert_output_contains "建议安装：sudo apt-get install nftables openssh-server diffutils fail2ban"
 }
 
 test_status_reports_ssh_and_listening_ports() {

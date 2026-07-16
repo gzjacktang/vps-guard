@@ -257,7 +257,7 @@ ensure_no_pending_firewall_rollback() {
     [[ -r "$state_file" ]] || continue
     hook="$(read_state_value "$state_file" hook | tail -1)"
     case "$hook" in
-      firewall | ssh-firewall | ssh-restore | ssh-hardening) ;;
+      firewall | ssh-firewall | ssh-restore | ssh-hardening | fail2ban) ;;
       *) continue ;;
     esac
     status="$(read_state_value "$state_file" status | tail -1)"

@@ -48,6 +48,20 @@ vps-guard ssh harden confirm|status <加固令牌>
 
 禁用密码必须提供目标用户已验证的密钥 proof，并从另一个新公钥会话提交加固。客户端公钥导入未确认时 5 分钟自动撤销；服务器端生成只允许 TTY 交互口令，私钥 10 分钟自动清理。参数、安全证明、恢复与发布门禁详见 [SSH 密钥设置与可选加固](SSH-HARDENING.md)。
 
+## Fail2ban SSH 防护
+
+```text
+vps-guard fail2ban install [--yes]
+vps-guard fail2ban apply --preset lenient|standard|strict|progressive|custom [策略参数] [--ignore-ip 地址] [--whitelist-current-ip|--no-whitelist-current-ip] [--rollback-minutes 3|5|10] [--yes]
+vps-guard fail2ban status
+vps-guard fail2ban banned
+vps-guard fail2ban unban <IPv4|IPv6>
+vps-guard fail2ban disable [--rollback-minutes 3|5|10] [--yes]
+vps-guard fail2ban restore <快照ID> [--rollback-minutes 3|5|10] [--yes]
+```
+
+安装是独立操作，只使用 Debian/Ubuntu 官方 APT 包；`apply` 不会隐式安装。自定义策略必须指定 `--findtime`、`--maxretry`、`--bantime`，可另设 `--increment true|false` 与 `--max-bantime`。写入前显示最终参数并校验候选配置，写入后启动默认 5 分钟回滚。完整参数边界与恢复步骤见 [Fail2ban SSH 防护](FAIL2BAN.md)。
+
 ## 快照
 
 ```text

@@ -441,7 +441,7 @@ start_ssh_port_migration_unlocked() {
     abort_ssh_migration "$token" "$snapshot_id" "$rollback_token" effective-config
     return $?
   fi
-  if ! apply_managed_firewall_ssh_ports "$transition_ports"; then
+  if ! apply_managed_firewall_ssh_ports "$transition_ports" || ! sync_fail2ban_ssh_ports "$transition_ports"; then
     abort_ssh_migration "$token" "$snapshot_id" "$rollback_token" firewall-apply
     return $?
   fi
@@ -538,7 +538,8 @@ confirm_ssh_port_migration() {
   effective_after="$(effective_sshd_ports)" || true
   if [[ "$effective_after" != "$new_port" ]] || ! reload_sshd_runtime ||
     ! verify_sshd_committed_listeners "$new_port" "$old_ports" ||
-    ! apply_managed_firewall_ssh_ports "$new_port" || ! confirm_rollback_under_lock "$rollback_token" 1 >/dev/null; then
+    ! apply_managed_firewall_ssh_ports "$new_port" || ! sync_fail2ban_ssh_ports "$new_port" ||
+    ! confirm_rollback_under_lock "$rollback_token" 1 >/dev/null; then
     release_rollback_lock "$rollback_dir"
     rm -rf "$state_dir/lock"
     abort_ssh_migration "$token" "$snapshot" "$rollback_token" commit-apply

@@ -59,7 +59,10 @@ show_main_menu() {
       6)
         show_backup_menu
         ;;
-      1 | 4 | 7)
+      4)
+        show_fail2ban_menu
+        ;;
+      1 | 7)
         printf '该功能将在后续实施切片中提供。\n'
         ;;
       *)
@@ -344,5 +347,58 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|preflight|ssh|firewall|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|ssh|firewall|fail2ban|backup|rollback|audit|help]\n'
+}
+
+show_fail2ban_menu() {
+  local choice preset ip minutes snapshot findtime maxretry bantime increment maxtime
+  while true; do
+    printf 'Fail2ban 管理\n1. 安装 Fail2ban\n2. 应用 SSH 防护策略\n3. 查看状态\n4. 查看封禁列表\n5. 解封 IP\n6. 停用自有配置\n7. 从快照恢复自有配置\n0. 返回\n请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1) install_fail2ban_package 0 || true ;;
+      2)
+        printf '策略 [lenient/standard/strict/progressive/custom，默认standard]：'
+        IFS= read -r preset || return 0
+        preset="${preset:-standard}"
+        if [[ "$preset" == custom ]]; then
+          printf '统计窗口秒数 findtime [60-86400]：'
+          IFS= read -r findtime || return 0
+          printf '失败次数 maxretry [1-20]：'
+          IFS= read -r maxretry || return 0
+          printf '首次封禁秒数 bantime [60-604800]：'
+          IFS= read -r bantime || return 0
+          printf '渐进封禁 [true/false，默认false]：'
+          IFS= read -r increment || return 0
+          printf '最长封禁秒数 [不小于bantime，最大2592000]：'
+          IFS= read -r maxtime || return 0
+          fail2ban_cli apply --preset custom --findtime "$findtime" --maxretry "$maxretry" \
+            --bantime "$bantime" --increment "${increment:-false}" --max-bantime "${maxtime:-604800}" || true
+        else
+          fail2ban_cli apply --preset "$preset" || true
+        fi
+        ;;
+      3) show_fail2ban_status || true ;;
+      4) show_fail2ban_banned || true ;;
+      5)
+        printf '要解封的 IPv4/IPv6：'
+        IFS= read -r ip || return 0
+        unban_fail2ban_ip "$ip" || true
+        ;;
+      6)
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        disable_fail2ban "${minutes:-5}" 0 || true
+        ;;
+      7)
+        printf '快照 ID：'
+        IFS= read -r snapshot || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        restore_fail2ban_from_snapshot "$snapshot" "${minutes:-5}" 0 || true
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
 }
