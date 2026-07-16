@@ -22,6 +22,18 @@ vps-guard firewall disable [--rollback-minutes 3|5|10] [--yes]
 
 基础端口只支持单值和逗号列表。所有写入先做冲突预检、规则摘要、语法检查和快照，并默认创建 5 分钟回滚。应用后必须从新 SSH 会话验证，再执行 `rollback confirm <令牌>`。完整规则、安全边界、兼容策略和恢复流程见 [nftables 防火墙说明](FIREWALL.md)。
 
+## SSH 端口迁移
+
+```text
+vps-guard ssh migrate --port 端口 [--rollback-minutes 3|5|10] [--yes]
+vps-guard ssh confirm <SSH迁移令牌>
+vps-guard ssh status <SSH迁移令牌>
+vps-guard ssh reset-port-22 [--rollback-minutes 3|5|10] [--yes]
+vps-guard ssh restore <快照ID> [--rollback-minutes 3|5|10] [--yes]
+```
+
+`migrate` 同时保留旧、新端口并同步 VPS Guard 防火墙；只有从目标新端口建立的 SSH 会话才能执行一次性 `ssh confirm`。底层回滚令牌不能绕过该验证直接取消。`reset-port-22` 使用同一事务，且可从带外控制台进入恢复流程。`restore` 只选择 SSH 与匹配的自有防火墙配置，并创建新的回滚保护。完整流程、限制和真实虚拟机发布门禁见 [SSH 端口两阶段迁移](SSH.md)。
+
 ## 快照
 
 ```text
@@ -64,6 +76,6 @@ vps-guard audit list
 | 0 | 成功、已安全取消或幂等操作已经完成 |
 | 1 | 文件、校验、调度或恢复失败 |
 | 2 | 参数或标识符错误 |
-| 3 | 环境冲突或关键防火墙状态无法确认，默认禁止写入 |
+| 3 | 环境冲突，或关键 SSH/防火墙状态无法确认，默认禁止写入 |
 | 4 | 权限不足 |
 | 5 | 系统未在正式支持矩阵中 |

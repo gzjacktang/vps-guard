@@ -6,7 +6,7 @@ rollback_root() {
 
 validate_rollback_token() {
   local token="$1"
-  [[ -n "$token" && "$token" != *[!A-Za-z0-9._-]* ]]
+  [[ -n "$token" && "$token" != "." && "$token" != ".." && "$token" != *[!A-Za-z0-9._-]* ]]
 }
 
 rollback_state_dir() {
@@ -62,7 +62,7 @@ start_rollback() {
       ;;
   esac
   case "$hook" in
-    none | firewall) ;;
+    none | firewall | ssh-firewall | ssh-restore) ;;
     *)
       error "不支持的回滚钩子：$hook"
       return "$EXIT_USAGE"
@@ -131,7 +131,8 @@ show_rollback_status() {
 
 confirm_rollback() {
   local token="$1"
-  local state_dir state_file status unit
+  local allow_managed="${2:-0}"
+  local state_dir state_file status unit hook
   state_dir="$(rollback_state_dir "$token")" || return $?
   state_file="$state_dir/state"
   [[ -r "$state_file" ]] || {
@@ -144,6 +145,12 @@ confirm_rollback() {
   fi
   acquire_rollback_lock "$state_dir" || return $?
   status="$(read_state_value "$state_file" status | tail -1)"
+  hook="$(read_state_value "$state_file" hook | tail -1)"
+  if [[ "$hook" == "ssh-firewall" && "$allow_managed" -ne 1 ]]; then
+    release_rollback_lock "$state_dir"
+    error "SSH 迁移回滚只能通过 ssh confirm 提交，不能直接取消"
+    return "$EXIT_CONFLICT"
+  fi
   case "$status" in
     confirmed)
       release_rollback_lock "$state_dir"
@@ -249,10 +256,16 @@ run_rollback() {
 }
 
 run_rollback_hook() {
-  # 文件快照恢复不会自动改变内核中的 nftables 对象；防火墙事务必须额外同步运行时，避免磁盘已恢复但 SSH 仍被旧规则阻断。
+  # 文件快照恢复不会自动改变 sshd 或 nftables 运行时；网络事务必须同步两者，避免磁盘已恢复但旧规则仍生效。
   case "$1" in
     none | "") return 0 ;;
     firewall) reload_firewall_runtime ;;
+    ssh-firewall | ssh-restore)
+      local firewall_status=0 ssh_status=0
+      reload_firewall_runtime || firewall_status=$?
+      reload_sshd_runtime || ssh_status=$?
+      [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 ]]
+      ;;
     *)
       error "无法执行未知回滚钩子：$1"
       return "$EXIT_FAILURE"
