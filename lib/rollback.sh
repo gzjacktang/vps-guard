@@ -129,10 +129,53 @@ show_rollback_status() {
   printf '令牌：%s\n状态：%s\n快照：%s\n窗口：%s 分钟\n' "$token" "$status" "$snapshot" "$minutes"
 }
 
-confirm_rollback() {
+confirm_rollback_under_lock() {
   local token="$1"
   local allow_managed="${2:-0}"
   local state_dir state_file status unit hook
+  state_dir="$(rollback_state_dir "$token")" || return $?
+  state_file="$state_dir/state"
+  status="$(read_state_value "$state_file" status | tail -1)"
+  hook="$(read_state_value "$state_file" hook | tail -1)"
+  if [[ "$hook" == "ssh-firewall" && "$allow_managed" -ne 1 ]]; then
+    error "SSH 迁移回滚只能通过 ssh confirm 提交，不能直接取消"
+    return "$EXIT_CONFLICT"
+  fi
+  case "$status" in
+    confirmed)
+      printf '此前已经确认，无需重复操作。\n'
+      return 0
+      ;;
+    pending) ;;
+    rolled-back)
+      printf '回滚已经执行，无法再取消。\n'
+      return 0
+      ;;
+    *)
+      error "当前状态不能确认：$status"
+      return "$EXIT_FAILURE"
+      ;;
+  esac
+
+  unit="$(read_state_value "$state_file" unit | tail -1)"
+  if ! systemctl stop "$unit.timer" "$unit.service" 2>/dev/null; then
+    audit_event rollback.confirm failure "token=$token reason=cancel-failed"
+    error "无法取消 systemd 回滚任务，状态保持等待确认"
+    return "$EXIT_FAILURE"
+  fi
+  if ! printf 'status=confirmed\nconfirmed=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$state_file"; then
+    audit_event rollback.confirm failure "token=$token reason=state-write"
+    error "systemd 任务已停止，但无法写入确认状态"
+    return "$EXIT_FAILURE"
+  fi
+  audit_event rollback.confirm success "token=$token"
+  printf '已确认，自动回滚已取消。\n'
+}
+
+confirm_rollback() {
+  local token="$1"
+  local allow_managed="${2:-0}"
+  local state_dir state_file result=0
   state_dir="$(rollback_state_dir "$token")" || return $?
   state_file="$state_dir/state"
   [[ -r "$state_file" ]] || {
@@ -144,48 +187,9 @@ confirm_rollback() {
     return 0
   fi
   acquire_rollback_lock "$state_dir" || return $?
-  status="$(read_state_value "$state_file" status | tail -1)"
-  hook="$(read_state_value "$state_file" hook | tail -1)"
-  if [[ "$hook" == "ssh-firewall" && "$allow_managed" -ne 1 ]]; then
-    release_rollback_lock "$state_dir"
-    error "SSH 迁移回滚只能通过 ssh confirm 提交，不能直接取消"
-    return "$EXIT_CONFLICT"
-  fi
-  case "$status" in
-    confirmed)
-      release_rollback_lock "$state_dir"
-      printf '此前已经确认，无需重复操作。\n'
-      return 0
-      ;;
-    pending) ;;
-    rolled-back)
-      release_rollback_lock "$state_dir"
-      printf '回滚已经执行，无法再取消。\n'
-      return 0
-      ;;
-    *)
-      release_rollback_lock "$state_dir"
-      error "当前状态不能确认：$status"
-      return "$EXIT_FAILURE"
-      ;;
-  esac
-
-  unit="$(read_state_value "$state_file" unit | tail -1)"
-  if ! systemctl stop "$unit.timer" "$unit.service" 2>/dev/null; then
-    audit_event rollback.confirm failure "token=$token reason=cancel-failed"
-    error "无法取消 systemd 回滚任务，状态保持等待确认"
-    release_rollback_lock "$state_dir"
-    return "$EXIT_FAILURE"
-  fi
-  if ! printf 'status=confirmed\nconfirmed=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$state_file"; then
-    audit_event rollback.confirm failure "token=$token reason=state-write"
-    release_rollback_lock "$state_dir"
-    error "systemd 任务已停止，但无法写入确认状态"
-    return "$EXIT_FAILURE"
-  fi
-  audit_event rollback.confirm success "token=$token"
+  confirm_rollback_under_lock "$token" "$allow_managed" || result=$?
   release_rollback_lock "$state_dir"
-  printf '已确认，自动回滚已取消。\n'
+  return "$result"
 }
 
 run_rollback() {

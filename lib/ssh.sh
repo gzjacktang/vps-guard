@@ -457,7 +457,7 @@ start_ssh_port_migration() {
 
 confirm_ssh_port_migration() {
   local token="$1"
-  local state_dir state_file status new_port old_ports snapshot rollback_token rollback_file rollback_status session_port effective_after
+  local state_dir state_file status new_port old_ports snapshot rollback_token rollback_dir rollback_file rollback_status session_port effective_after result
   state_dir="$(ssh_migration_directory "$token")" || return $?
   state_file="$state_dir/state"
   [[ -r "$state_file" ]] || {
@@ -500,8 +500,28 @@ confirm_ssh_port_migration() {
     error "该 SSH 迁移正由另一个进程提交"
     return "$EXIT_CONFLICT"
   fi
+  rollback_dir="$(rollback_state_dir "$rollback_token")" || {
+    result=$?
+    rm -rf "$state_dir/lock"
+    return "$result"
+  }
+  acquire_rollback_lock "$rollback_dir" || {
+    result=$?
+    rm -rf "$state_dir/lock"
+    return "$result"
+  }
+  # 与定时任务共用回滚锁，并在锁内复查；超时恢复与新会话提交只能有一个获胜。
+  rollback_status="$(read_state_value "$rollback_file" status 2>/dev/null | tail -1)"
+  if [[ "$rollback_status" != "pending" ]]; then
+    release_rollback_lock "$rollback_dir"
+    rm -rf "$state_dir/lock"
+    error "关联自动回滚已不是等待确认状态：${rollback_status:-未知}"
+    error "拒绝在回滚已执行或正在执行后重新应用 SSH 迁移"
+    return "$EXIT_CONFLICT"
+  fi
 
   if ! write_managed_ssh_ports "$new_port" || ! sshd -t; then
+    release_rollback_lock "$rollback_dir"
     rm -rf "$state_dir/lock"
     abort_ssh_migration "$token" "$snapshot" "$rollback_token" commit-syntax
     return $?
@@ -509,16 +529,19 @@ confirm_ssh_port_migration() {
   effective_after="$(effective_sshd_ports)" || true
   if [[ "$effective_after" != "$new_port" ]] || ! reload_sshd_runtime ||
     ! verify_sshd_committed_listeners "$new_port" "$old_ports" ||
-    ! apply_managed_firewall_ssh_ports "$new_port" || ! confirm_rollback "$rollback_token" 1 >/dev/null; then
+    ! apply_managed_firewall_ssh_ports "$new_port" || ! confirm_rollback_under_lock "$rollback_token" 1 >/dev/null; then
+    release_rollback_lock "$rollback_dir"
     rm -rf "$state_dir/lock"
     abort_ssh_migration "$token" "$snapshot" "$rollback_token" commit-apply
     return $?
   fi
   if ! printf 'status=committed\ncommitted=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$state_file"; then
+    release_rollback_lock "$rollback_dir"
     rm -rf "$state_dir/lock"
     abort_ssh_migration "$token" "$snapshot" "$rollback_token" commit-state-write
     return $?
   fi
+  release_rollback_lock "$rollback_dir"
   rm -rf "$state_dir/lock"
   audit_event ssh.confirm success "token=$token old=$old_ports new=$new_port"
   printf 'SSH 端口迁移已提交：当前端口 %s，旧端口 %s 已从 sshd 与 VPS Guard 防火墙移除。\n' "$new_port" "$old_ports"
@@ -565,7 +588,9 @@ show_ssh_restore_dry_run() {
   done <"$source_dir/manifest.tsv"
   if [[ -r "$source_dir/roots.tsv" ]]; then
     while IFS=$'\t' read -r root_path root_kind; do
-      [[ "$root_path" == "/etc/ssh/sshd_config.d" && "$root_kind" == "dir" && -d "$fs_root$root_path" ]] || continue
+      [[ "$root_path" == "/etc/ssh/sshd_config.d" &&
+        ("$root_kind" == "dir" || "$root_kind" == "missing") &&
+        -d "$fs_root$root_path" ]] || continue
       found_listing="$(find "$fs_root$root_path" -type f -print | sort)" || return "$EXIT_FAILURE"
       while IFS= read -r found; do
         [[ -n "$found" ]] || continue
@@ -603,7 +628,9 @@ create_ssh_restore_view() {
     fi
   done <"$source_dir/manifest.tsv"
   if [[ -r "$source_dir/roots.tsv" ]]; then
-    awk -F '\t' '$1 == "/etc/ssh/sshd_config.d" { print }' "$source_dir/roots.tsv" >"$temp_dir/roots.tsv" || return "$EXIT_FAILURE"
+    # 通用恢复拒绝递归删除目录；把“当时不存在”转换为空的精确目录集合，只删除当前 drop-in。
+    awk -F '\t' '$1 == "/etc/ssh/sshd_config.d" && ($2 == "dir" || $2 == "missing") { print $1 "\tdir" }' \
+      "$source_dir/roots.tsv" >"$temp_dir/roots.tsv" || return "$EXIT_FAILURE"
   fi
   printf '%s\n' "$temp_id"
 }

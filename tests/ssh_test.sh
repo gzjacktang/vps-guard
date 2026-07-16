@@ -245,6 +245,31 @@ test_ssh_timeout_rollback_restores_sshd_and_firewall_runtime() {
   [[ ! -e "$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf" ]]
 }
 
+test_ssh_confirm_cannot_race_the_timeout_rollback_lock() {
+  local token rollback_token managed_before firewall_before
+  setup_ssh_test
+  trap teardown_test_root RETURN
+  run_vps_guard ssh migrate --port 2222 --yes
+  assert_status 0
+  token="${COMMAND_OUTPUT#*SSH 迁移等待新会话确认：}"
+  token="${token%%$'\n'*}"
+  rollback_token="$(sed -n 's/^rollback=//p' "$TEST_ROOT/data/ssh-migrations/$token/state")"
+  mkdir "$TEST_ROOT/data/rollbacks/$rollback_token/lock"
+  printf '%s\n' "$$" >"$TEST_ROOT/data/rollbacks/$rollback_token/lock/pid"
+  write_stub sleep 'exit 0'
+  managed_before="$(<"$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf")"
+  firewall_before="$(<"$TEST_ROOT/fs/etc/vps-guard/firewall.conf")"
+  TEST_SSH_CONNECTION="198.51.100.10 50001 203.0.113.20 2222"
+
+  run_vps_guard ssh confirm "$token"
+
+  assert_status 1
+  assert_output_contains "回滚任务正由另一个进程处理"
+  [[ "$(<"$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf")" == "$managed_before" ]]
+  [[ "$(<"$TEST_ROOT/fs/etc/vps-guard/firewall.conf")" == "$firewall_before" ]]
+  grep -q '^status=pending$' "$TEST_ROOT/data/ssh-migrations/$token/state"
+}
+
 test_ssh_migration_rejects_invalid_duplicate_occupied_or_unprotected_targets() {
   setup_ssh_test
   trap teardown_test_root RETURN
@@ -414,12 +439,35 @@ test_ssh_restore_dry_run_is_read_only_even_when_backup_storage_is_not_writable()
   fi
 }
 
+test_ssh_restore_treats_a_missing_dropin_directory_as_an_empty_exact_set() {
+  local snapshot
+  setup_ssh_test
+  trap teardown_test_root RETURN
+  rm -rf "$TEST_ROOT/fs/etc/ssh/sshd_config.d"
+  run_vps_guard backup create --label ssh-no-dropins
+  assert_status 0
+  snapshot="${COMMAND_OUTPUT#*快照已创建：}"
+  snapshot="${snapshot%%$'\n'*}"
+  mkdir -p "$TEST_ROOT/fs/etc/ssh/sshd_config.d"
+  printf 'Port 9999\n' >"$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf"
+
+  run_vps_guard --dry-run ssh restore "$snapshot" --yes
+  assert_status 0
+  assert_output_contains "将删除：/etc/ssh/sshd_config.d/00-vps-guard-port.conf"
+  [[ -e "$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf" ]]
+
+  run_vps_guard ssh restore "$snapshot" --yes
+  assert_status 0
+  [[ ! -e "$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf" ]]
+}
+
 test_ssh_migration_dry_run_shows_two_phase_plan_without_writes
 test_ssh_migration_keeps_old_port_until_new_session_commits_once
 test_ssh_migration_reloads_ubuntu_socket_activation_generator
 test_ssh_syntax_failure_restores_original_files_and_cancels_timer
 test_ssh_rollback_schedule_failure_leaves_configuration_untouched
 test_ssh_timeout_rollback_restores_sshd_and_firewall_runtime
+test_ssh_confirm_cannot_race_the_timeout_rollback_lock
 test_ssh_migration_rejects_invalid_duplicate_occupied_or_unprotected_targets
 test_ssh_migration_recovers_session_from_sudo_parent_chain
 test_ssh_restore_rejects_path_like_snapshot_identifiers
@@ -427,3 +475,4 @@ test_ssh_migration_rolls_back_when_new_listener_does_not_appear
 test_ssh_migration_blocks_overlap_and_reset_to_22_uses_same_safe_flow
 test_ssh_restore_uses_selected_snapshot_and_a_new_rollback_guard
 test_ssh_restore_dry_run_is_read_only_even_when_backup_storage_is_not_writable
+test_ssh_restore_treats_a_missing_dropin_directory_as_an_empty_exact_set

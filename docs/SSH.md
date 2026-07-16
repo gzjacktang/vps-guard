@@ -68,7 +68,7 @@ sudo vps-guard --dry-run ssh restore <快照ID> --yes
 sudo vps-guard ssh restore <快照ID> --rollback-minutes 5
 ```
 
-恢复视图只选择目标快照中的以下范围：
+恢复视图只选择目标快照中的以下范围；若快照时 `sshd_config.d` 不存在，会把它视为“应为空”的精确集合，删除当前目录中的 drop-in，但保留目录本身供 sshd 使用：
 
 - `/etc/ssh/sshd_config` 与 `/etc/ssh/sshd_config.d/*.conf`
 - `/etc/vps-guard/ssh.conf`
