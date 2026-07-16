@@ -20,6 +20,8 @@ source "$VPS_GUARD_ROOT/lib/backup.sh"
 source "$VPS_GUARD_ROOT/lib/rollback.sh"
 # shellcheck source=lib/firewall.sh
 source "$VPS_GUARD_ROOT/lib/firewall.sh"
+# shellcheck source=lib/ssh.sh
+source "$VPS_GUARD_ROOT/lib/ssh.sh"
 
 DRY_RUN=0
 
@@ -76,6 +78,10 @@ main() {
     firewall)
       require_root
       firewall_cli "${@:2}"
+      ;;
+    ssh)
+      require_root
+      ssh_cli "${@:2}"
       ;;
     audit)
       require_root

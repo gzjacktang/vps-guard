@@ -33,3 +33,9 @@ VPS Guard 不修改 `FORWARD`、NAT、Docker/Podman/LXC/CNI/Kubernetes 链、VPN
 `/etc/vps-guard/firewall.conf` 是防火墙所有权记录。没有有效状态文件时，即使发现的对象名称恰好是 `inet vps_guard`，也一律视为第三方或归属不明并返回冲突码 3，禁止接管。
 
 启用时同时保留当前 `SSH_CONNECTION` 服务端端口和 `sshd -T` 配置端口。存在未确认的防火墙事务时禁止叠加第二个事务。详细流程见 [nftables 防火墙说明](FIREWALL.md)。
+
+## SSH 两阶段事务
+
+SSH 迁移把 `SSH_CONNECTION` 当作已验证会话证据，把 `sshd -T` 当作磁盘配置的生效结果；两者用途不同，不能互相替代。迁移阶段先启动 systemd 回滚，再同时写入旧、新端口并同步防火墙。`sshd -t`、生效端口、sshd 监听、服务 reload 或防火墙任一检查失败都会立即恢复快照。
+
+只有目标新端口会话才能通过 `ssh confirm` 关闭旧端口。关联的 `ssh-firewall` 回滚令牌拒绝普通 `rollback confirm`，避免在旧会话或本机监听检查后绕过证明步骤。SSH 迁移或选择性恢复等待确认时，所有普通防火墙写入也被阻断，避免不同快照的计时器交叉覆盖。超时恢复文件后还会同步 reload sshd 与自有 nftables 运行时。详细状态、受管文件和恢复入口见 [SSH 端口两阶段迁移](SSH.md)。

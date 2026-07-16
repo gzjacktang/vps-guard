@@ -53,15 +53,69 @@ show_main_menu() {
       3)
         show_firewall_menu
         ;;
+      2)
+        show_ssh_menu
+        ;;
       6)
         show_backup_menu
         ;;
-      1 | 2 | 4 | 7)
+      1 | 4 | 7)
         printf '该功能将在后续实施切片中提供。\n'
         ;;
       *)
         printf '无效选项，请重新输入。\n'
         ;;
+    esac
+  done
+}
+
+show_ssh_menu() {
+  local choice port minutes token
+  while true; do
+    printf 'SSH 管理\n'
+    printf '1. 迁移 SSH 端口\n'
+    printf '2. 从新端口会话确认迁移\n'
+    printf '3. 查看迁移状态\n'
+    printf '4. 重置端口到 22\n'
+    printf '5. 从快照恢复 SSH\n'
+    printf '0. 返回主菜单\n'
+    printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1 | 4)
+        if [[ "$choice" == "1" ]]; then
+          printf '新 SSH 端口：'
+          IFS= read -r port || return 0
+        else
+          port=22
+          printf '警告：重置到 22 会改变当前入口，并可能暴露标准端口。\n'
+        fi
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        if [[ "$choice" == "4" ]]; then
+          start_ssh_port_migration "$port" "${minutes:-5}" 0 1 1 || true
+        else
+          start_ssh_port_migration "$port" "${minutes:-5}" 0 || true
+        fi
+        ;;
+      2 | 3)
+        printf 'SSH 迁移令牌：'
+        IFS= read -r token || return 0
+        if [[ "$choice" == "2" ]]; then
+          confirm_ssh_port_migration "$token" || true
+        else
+          show_ssh_migration_status "$token" || true
+        fi
+        ;;
+      5)
+        printf '目标快照 ID：'
+        IFS= read -r token || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        restore_ssh_from_snapshot "$token" "${minutes:-5}" 0 || true
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
     esac
   done
 }
@@ -193,5 +247,5 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|preflight|firewall|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|ssh|firewall|backup|rollback|audit|help]\n'
 }

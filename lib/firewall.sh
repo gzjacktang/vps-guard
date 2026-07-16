@@ -40,8 +40,8 @@ normalize_basic_ports() {
   fi
 }
 
-current_ssh_ports() {
-  local effective ports connection client_ip client_port server_ip server_port extra
+effective_sshd_ports() {
+  local effective ports
   command_exists sshd || {
     error "无法检测当前 SSH 端口：缺少 sshd"
     return "$EXIT_FAILURE"
@@ -58,6 +58,12 @@ current_ssh_ports() {
     return "$EXIT_FAILURE"
   }
   ports="$(normalize_basic_ports "$ports")" || return $?
+  printf '%s\n' "$ports"
+}
+
+current_ssh_ports() {
+  local ports connection client_ip client_port server_ip server_port extra
+  ports="$(effective_sshd_ports)" || return $?
 
   connection="${VPS_GUARD_SSH_CONNECTION:-${SSH_CONNECTION:-}}"
   if [[ -n "$connection" ]]; then
@@ -250,7 +256,10 @@ ensure_no_pending_firewall_rollback() {
   for state_file in "$root"/*/state; do
     [[ -r "$state_file" ]] || continue
     hook="$(read_state_value "$state_file" hook | tail -1)"
-    [[ "$hook" == "firewall" ]] || continue
+    case "$hook" in
+      firewall | ssh-firewall | ssh-restore) ;;
+      *) continue ;;
+    esac
     status="$(read_state_value "$state_file" status | tail -1)"
     case "$status" in
       pending | running)
@@ -267,16 +276,50 @@ firewall_include_line() {
   printf 'include "/etc/nftables.d/vps-guard.nft" # vps-guard\n'
 }
 
+ensure_firewall_include_line() {
+  local nftables_conf include_line
+  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
+  include_line="$(firewall_include_line)"
+  if [[ ! -e "$nftables_conf" ]]; then
+    mkdir -p "$(dirname "$nftables_conf")" || return "$EXIT_FAILURE"
+    printf '#!/usr/sbin/nft -f\n' >"$nftables_conf" || return "$EXIT_FAILURE"
+  fi
+  if ! grep -Fqx "$include_line" "$nftables_conf"; then
+    printf '\n%s\n' "$include_line" >>"$nftables_conf" || return "$EXIT_FAILURE"
+  fi
+}
+
+remove_firewall_include_line() {
+  local nftables_conf include_line temp mode
+  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
+  include_line="$(firewall_include_line)"
+  [[ -e "$nftables_conf" ]] || return 0
+  temp="$(dirname "$nftables_conf")/.vps-guard-nftables.$$.tmp"
+  mode="$(file_mode "$nftables_conf")" || return "$EXIT_FAILURE"
+  if ! awk -v include_line="$include_line" '$0 != include_line { print }' "$nftables_conf" >"$temp" ||
+    ! chmod "$mode" "$temp" || ! mv "$temp" "$nftables_conf"; then
+    rm -f "$temp" || true
+    return "$EXIT_FAILURE"
+  fi
+}
+
+reconcile_firewall_include_line() {
+  if [[ -r "$(firewall_state_path)" && "$(firewall_state_value enabled)" == "1" &&
+  -r "$(firewall_config_path)" ]]; then
+    ensure_firewall_include_line
+  else
+    remove_firewall_include_line
+  fi
+}
+
 install_firewall_configuration() {
   local candidate="$1"
   local ssh_ports="$2"
   local tcp_ports="$3"
   local udp_ports="$4"
-  local config_path state_path nftables_conf include_line
+  local config_path state_path
   config_path="$(firewall_config_path)"
   state_path="$(firewall_state_path)"
-  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
-  include_line="$(firewall_include_line)"
 
   umask 077
   mkdir -p "$(dirname "$config_path")" "$(dirname "$state_path")" || return "$EXIT_FAILURE"
@@ -289,13 +332,26 @@ install_firewall_configuration() {
   fi
   chmod 0600 "$state_path" || return "$EXIT_FAILURE"
 
-  if [[ ! -e "$nftables_conf" ]]; then
-    mkdir -p "$(dirname "$nftables_conf")" || return "$EXIT_FAILURE"
-    printf '#!/usr/sbin/nft -f\n' >"$nftables_conf" || return "$EXIT_FAILURE"
+  ensure_firewall_include_line
+}
+
+apply_managed_firewall_ssh_ports() {
+  local ssh_ports="$1"
+  local tcp_ports udp_ports candidate
+  require_firewall_enabled || return $?
+  ssh_ports="$(normalize_basic_ports "$ssh_ports")" || return $?
+  [[ -n "$ssh_ports" ]] || return "$EXIT_USAGE"
+  tcp_ports="$(firewall_state_value tcp_ports)"
+  udp_ports="$(firewall_state_value udp_ports)"
+  candidate="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-ssh.XXXXXX")" || return "$EXIT_FAILURE"
+  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
+    ! validate_firewall_candidate "$candidate" ||
+    ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
+    ! reload_firewall_runtime; then
+    rm -f "$candidate" || true
+    return "$EXIT_FAILURE"
   fi
-  if ! grep -Fqx "$include_line" "$nftables_conf"; then
-    printf '\n%s\n' "$include_line" >>"$nftables_conf" || return "$EXIT_FAILURE"
-  fi
+  rm -f "$candidate" || true
 }
 
 reload_firewall_runtime() {
@@ -318,19 +374,7 @@ restore_firewall_snapshot() {
 }
 
 remove_firewall_configuration() {
-  local nftables_conf include_line temp mode
-  nftables_conf="${VPS_GUARD_FS_ROOT:-}/etc/nftables.conf"
-  include_line="$(firewall_include_line)"
-
-  if [[ -e "$nftables_conf" ]]; then
-    temp="$(dirname "$nftables_conf")/.vps-guard-nftables.$$.tmp"
-    mode="$(file_mode "$nftables_conf")" || return "$EXIT_FAILURE"
-    if ! awk -v include_line="$include_line" '$0 != include_line { print }' "$nftables_conf" >"$temp" ||
-      ! chmod "$mode" "$temp" || ! mv "$temp" "$nftables_conf"; then
-      rm -f "$temp" || true
-      return "$EXIT_FAILURE"
-    fi
-  fi
+  remove_firewall_include_line || return $?
   rm -f "$(firewall_config_path)" "$(firewall_state_path)"
 }
 

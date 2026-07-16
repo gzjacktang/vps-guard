@@ -51,6 +51,7 @@ managed_paths() {
   printf '%s\n' \
     '/etc/ssh/sshd_config' \
     '/etc/ssh/sshd_config.d' \
+    '/etc/vps-guard/ssh.conf' \
     '/etc/nftables.conf' \
     '/etc/nftables.d/vps-guard.nft' \
     '/etc/vps-guard/firewall.conf' \
@@ -274,7 +275,8 @@ list_snapshots() {
 
 snapshot_directory() {
   local snapshot_id="$1"
-  if [[ -z "$snapshot_id" || "$snapshot_id" == *[!A-Za-z0-9._-]* ]]; then
+  if [[ -z "$snapshot_id" || "$snapshot_id" == "." || "$snapshot_id" == ".." ||
+    "$snapshot_id" == *[!A-Za-z0-9._-]* ]]; then
     error "快照 ID 不合法"
     return "$EXIT_USAGE"
   fi
