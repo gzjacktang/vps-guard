@@ -45,6 +45,8 @@ sudo vps-guard ssh restore <已知快照ID> --rollback-minutes 5
 
 重置到 22 仍需从新的 22 端口 SSH 会话确认；选择性恢复完成后需从新会话验证，再确认输出的普通回滚令牌。不要手工删除 `00-vps-guard-port.conf` 而不同时恢复原 `Port` 指令和防火墙状态。
 
+SSH 认证加固使用 `hard-...` 事务令牌。新公钥会话无法登录时，不要执行 `ssh harden confirm`，保留旧会话并等待 3/5/10 分钟自动恢复。客户端公钥导入默认 5 分钟自动撤销认证 drop-in 和本工具新增密钥；服务器生成的备用私钥默认 10 分钟清理。可用 `ssh key status` 查看状态、对待确认项执行 `ssh key discard` 立即撤销。通用 SSH 快照不覆盖用户自行维护的 `authorized_keys`，避免恢复配置时意外删除其他管理员密钥。完整排错见 [SSH 密钥设置与可选加固](SSH-HARDENING.md)。
+
 ## 防火墙恢复
 
 防火墙变更后无法建立新 SSH 会话时，不要执行 `rollback confirm`，等待 3/5/10 分钟窗口结束。自动回滚会恢复 `/etc/nftables.conf`、自有规则文件和状态文件，并同步重新加载或删除 `table inet vps_guard`。
@@ -56,6 +58,8 @@ sudo vps-guard rollback status <令牌>
 sudo vps-guard rollback run <令牌>
 sudo vps-guard firewall status
 ```
+
+若日志提示配置事务锁等待超时，systemd 会每 30 秒重试。不要直接删除仍由活动进程持有的锁；应从带外控制台确认并终止卡住的 `vps-guard` 事务进程，再手工执行 `rollback run`。空锁或所属 PID 已退出时，工具会自动清理陈旧锁。
 
 如需手工停用自有运行时表，只删除本工具的表，不要执行 `nft flush ruleset`：
 

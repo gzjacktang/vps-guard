@@ -76,6 +76,7 @@ check_dependencies() {
     "systemctl:systemd"
     "systemd-run:systemd"
     "sshd:openssh-server"
+    "runuser:util-linux"
     "fail2ban-client:fail2ban"
   )
 

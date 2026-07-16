@@ -4,6 +4,110 @@ rollback_root() {
   printf '%s/rollbacks\n' "$(backup_data_dir)"
 }
 
+config_transaction_lock_dir() {
+  printf '%s/config-transaction.lock\n' "$(backup_data_dir)"
+}
+
+prepare_config_transaction_lock_owner() {
+  local lock_dir owner_dir
+  lock_dir="$(config_transaction_lock_dir)"
+  mkdir -p "$(dirname "$lock_dir")" || return "$EXIT_FAILURE"
+  owner_dir="$(mktemp -d "$(dirname "$lock_dir")/.config-transaction.owner.XXXXXX")" || return "$EXIT_FAILURE"
+  printf '%s\n' "${BASHPID:-$$}" >"$owner_dir/pid" || {
+    rm -rf "$owner_dir"
+    return "$EXIT_FAILURE"
+  }
+  CONFIG_TRANSACTION_OWNER_DIR="$owner_dir"
+}
+
+acquire_prepared_config_transaction_lock() {
+  local owner_dir="$1" lock_dir owner_name
+  lock_dir="$(config_transaction_lock_dir)"
+  owner_name="${owner_dir##*/}"
+  (
+    set -o noclobber
+    printf '%s\n' "$owner_name" >"$lock_dir"
+  ) 2>/dev/null
+}
+
+release_config_transaction_lock() {
+  local owner_dir="$1" lock_dir owner_name current=""
+  lock_dir="$(config_transaction_lock_dir)"
+  owner_name="${owner_dir##*/}"
+  [[ ! -f "$lock_dir" || -L "$lock_dir" ]] || current="$(sed -n '1p' "$lock_dir" 2>/dev/null || true)"
+  [[ "$current" != "$owner_name" ]] || rm -f "$lock_dir"
+  rm -rf "$owner_dir"
+}
+
+clear_stale_config_transaction_lock() {
+  local lock_dir target owner_dir owner=""
+  lock_dir="$(config_transaction_lock_dir)"
+  if [[ -f "$lock_dir" && ! -L "$lock_dir" ]]; then
+    target="$(sed -n '1p' "$lock_dir" 2>/dev/null || true)"
+    case "$target" in
+      .config-transaction.owner.*) owner_dir="$(dirname "$lock_dir")/$target" ;;
+      *)
+        [[ "$(sed -n '1p' "$lock_dir" 2>/dev/null || true)" == "$target" ]] || return 1
+        rm -f "$lock_dir"
+        return $?
+        ;;
+    esac
+    owner="$(sed -n '1p' "$owner_dir/pid" 2>/dev/null || true)"
+    [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null && return 1
+    [[ "$(sed -n '1p' "$lock_dir" 2>/dev/null || true)" == "$target" ]] || return 1
+    rm -f "$lock_dir" || return 1
+    rm -rf "$owner_dir"
+    return 0
+  fi
+  # 兼容开发预览版留下的旧式目录锁；有效 PID 仍视为活动事务。
+  if [[ -d "$lock_dir" ]]; then
+    owner="$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)"
+    [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null && return 1
+    rm -rf "$lock_dir"
+    return $?
+  fi
+  [[ ! -e "$lock_dir" ]]
+}
+
+with_config_transaction_lock() (
+  local owner_dir
+  CONFIG_TRANSACTION_OWNER_DIR=""
+  prepare_config_transaction_lock_owner || return $?
+  owner_dir="$CONFIG_TRANSACTION_OWNER_DIR"
+  if ! acquire_prepared_config_transaction_lock "$owner_dir"; then
+    if ! clear_stale_config_transaction_lock || ! acquire_prepared_config_transaction_lock "$owner_dir"; then
+      release_config_transaction_lock "$owner_dir"
+      error "另一个配置事务正在准备或写入"
+      return "$EXIT_CONFLICT"
+    fi
+  fi
+  trap 'release_config_transaction_lock "$owner_dir"' EXIT INT TERM
+  [[ "$(sed -n '1p' "$(config_transaction_lock_dir)" 2>/dev/null || true)" == "${owner_dir##*/}" ]] || return "$EXIT_CONFLICT"
+  "$@"
+)
+
+with_config_transaction_lock_wait() (
+  local owner_dir max_seconds ticks=0
+  max_seconds="${VPS_GUARD_CONFIG_LOCK_WAIT_SECONDS:-60}"
+  [[ "$max_seconds" =~ ^[0-9]+$ && "$max_seconds" -ge 1 && "$max_seconds" -le 600 ]] || max_seconds=60
+  CONFIG_TRANSACTION_OWNER_DIR=""
+  prepare_config_transaction_lock_owner || return $?
+  owner_dir="$CONFIG_TRANSACTION_OWNER_DIR"
+  while ! acquire_prepared_config_transaction_lock "$owner_dir"; do
+    clear_stale_config_transaction_lock || true
+    ticks=$((ticks + 1))
+    if [[ "$ticks" -ge $((max_seconds * 10)) ]]; then
+      release_config_transaction_lock "$owner_dir"
+      error "配置事务锁等待超过 ${max_seconds} 秒；拒绝与仍可能写入的进程并发恢复"
+      return "$EXIT_CONFLICT"
+    fi
+    sleep 0.1
+  done
+  trap 'release_config_transaction_lock "$owner_dir"' EXIT INT TERM
+  [[ "$(sed -n '1p' "$(config_transaction_lock_dir)" 2>/dev/null || true)" == "${owner_dir##*/}" ]] || return "$EXIT_CONFLICT"
+  "$@"
+)
+
 validate_rollback_token() {
   local token="$1"
   [[ -n "$token" && "$token" != "." && "$token" != ".." && "$token" != *[!A-Za-z0-9._-]* ]]
@@ -62,7 +166,7 @@ start_rollback() {
       ;;
   esac
   case "$hook" in
-    none | firewall | ssh-firewall | ssh-restore) ;;
+    none | firewall | ssh-firewall | ssh-restore | ssh-hardening) ;;
     *)
       error "不支持的回滚钩子：$hook"
       return "$EXIT_USAGE"
@@ -93,7 +197,8 @@ start_rollback() {
     return "$EXIT_FAILURE"
   fi
 
-  if ! systemd-run --quiet --unit="$unit" --on-active="${minutes}m" --property=Type=oneshot --collect \
+  if ! systemd-run --quiet --unit="$unit" --on-active="${minutes}m" --property=Type=oneshot \
+    --property=Restart=on-failure --property=RestartSec=30s --collect \
     "$command_path" rollback run "$token"; then
     printf 'status=schedule-failed\n' >>"$state_dir/state"
     audit_event rollback.start failure "token=$token snapshot=$snapshot_id reason=schedule-failed"
@@ -137,9 +242,17 @@ confirm_rollback_under_lock() {
   state_file="$state_dir/state"
   status="$(read_state_value "$state_file" status | tail -1)"
   hook="$(read_state_value "$state_file" hook | tail -1)"
-  if [[ "$hook" == "ssh-firewall" && "$allow_managed" -ne 1 ]]; then
-    error "SSH 迁移回滚只能通过 ssh confirm 提交，不能直接取消"
-    return "$EXIT_CONFLICT"
+  if [[ "$allow_managed" -ne 1 ]]; then
+    case "$hook" in
+      ssh-firewall)
+        error "SSH 迁移回滚只能通过 ssh confirm 提交，不能直接取消"
+        return "$EXIT_CONFLICT"
+        ;;
+      ssh-hardening)
+        error "SSH 加固回滚只能通过 ssh harden confirm 提交，不能直接取消"
+        return "$EXIT_CONFLICT"
+        ;;
+    esac
   fi
   case "$status" in
     confirmed)
@@ -193,6 +306,16 @@ confirm_rollback() {
 }
 
 run_rollback() {
+  local token="$1" result=0
+  with_config_transaction_lock_wait run_rollback_unlocked "$@" || result=$?
+  if [[ "$result" -ne 0 ]]; then
+    audit_event rollback.run failure "token=$token reason=config-transaction-lock"
+    error "自动回滚尚未执行；systemd 将重试。若事务进程持续卡住，请从带外控制台终止该进程后执行：vps-guard rollback run $token"
+  fi
+  return "$result"
+}
+
+run_rollback_unlocked() {
   local token="$1"
   local state_dir state_file status snapshot hook
   state_dir="$(rollback_state_dir "$token")" || return $?
@@ -270,6 +393,7 @@ run_rollback_hook() {
       reload_sshd_runtime || ssh_status=$?
       [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 ]]
       ;;
+    ssh-hardening) reload_sshd_runtime ;;
     *)
       error "无法执行未知回滚钩子：$1"
       return "$EXIT_FAILURE"

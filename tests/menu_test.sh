@@ -94,11 +94,26 @@ test_root_user_can_open_ssh_migration_submenu() {
 
   assert_status 0
   assert_output_contains "SSH 管理"
-  assert_output_contains "1. 迁移 SSH 端口"
-  assert_output_contains "2. 从新端口会话确认迁移"
-  assert_output_contains "4. 重置端口到 22"
-  assert_output_contains "5. 从快照恢复 SSH"
+  assert_output_contains "1. 查看实际配置与风险"
+  assert_output_contains "2. SSH 端口管理"
+  assert_output_contains "3. SSH 密钥设置"
+  assert_output_contains "4. 可选 SSH 加固"
+  assert_output_contains "5. SSH 快照恢复"
   assert_output_contains "已退出"
+}
+
+test_root_user_can_open_nested_ssh_key_menu() {
+  setup_test_root
+  trap teardown_test_root RETURN
+  write_stub id 'printf "0\n"'
+
+  run_vps_guard_with_input $'2\n3\n0\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "SSH 密钥设置"
+  assert_output_contains "客户端 Ed25519 生成引导"
+  assert_output_contains "导入并校验公钥"
+  assert_output_contains "服务器端生成加密密钥（备用）"
 }
 
 test_root_user_can_run_status_from_menu
@@ -106,3 +121,4 @@ test_root_user_can_run_preflight_from_diagnostics_menu
 test_root_user_can_open_backup_menu_and_list_snapshots
 test_root_user_can_open_firewall_menu_and_view_status
 test_root_user_can_open_ssh_migration_submenu
+test_root_user_can_open_nested_ssh_key_menu

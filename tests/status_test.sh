@@ -40,6 +40,7 @@ test_status_only_proposes_missing_dependencies() {
   write_stub systemctl 'exit 0'
   write_stub systemd-run 'exit 0'
   write_stub ss 'exit 0'
+  write_stub runuser 'exit 0'
 
   run_vps_guard status
 

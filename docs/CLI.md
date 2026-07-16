@@ -34,6 +34,20 @@ vps-guard ssh restore <快照ID> [--rollback-minutes 3|5|10] [--yes]
 
 `migrate` 同时保留旧、新端口并同步 VPS Guard 防火墙；只有从目标新端口建立的 SSH 会话才能执行一次性 `ssh confirm`。底层回滚令牌不能绕过该验证直接取消。`reset-port-22` 使用同一事务，且可从带外控制台进入恢复流程。`restore` 只选择 SSH 与匹配的自有防火墙配置，并创建新的回滚保护。完整流程、限制和真实虚拟机发布门禁见 [SSH 端口两阶段迁移](SSH.md)。
 
+## SSH 密钥与可选加固
+
+```text
+vps-guard ssh inspect --user 用户
+vps-guard ssh key guide --user 用户
+vps-guard ssh key import --user 用户 --file 公钥文件 [--yes]
+vps-guard ssh key generate-server --user 用户 [--yes]
+vps-guard ssh key confirm|status|discard <密钥令牌>
+vps-guard ssh harden apply --user 用户 [--proof 密钥令牌] [加固选项] [--rollback-minutes 3|5|10] [--yes]
+vps-guard ssh harden confirm|status <加固令牌>
+```
+
+禁用密码必须提供目标用户已验证的密钥 proof，并从另一个新公钥会话提交加固。客户端公钥导入未确认时 5 分钟自动撤销；服务器端生成只允许 TTY 交互口令，私钥 10 分钟自动清理。参数、安全证明、恢复与发布门禁详见 [SSH 密钥设置与可选加固](SSH-HARDENING.md)。
+
 ## 快照
 
 ```text
