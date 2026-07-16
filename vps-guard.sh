@@ -22,6 +22,8 @@ source "$VPS_GUARD_ROOT/lib/rollback.sh"
 source "$VPS_GUARD_ROOT/lib/firewall.sh"
 # shellcheck source=lib/ssh.sh
 source "$VPS_GUARD_ROOT/lib/ssh.sh"
+# shellcheck source=lib/ssh_hardening.sh
+source "$VPS_GUARD_ROOT/lib/ssh_hardening.sh"
 
 DRY_RUN=0
 

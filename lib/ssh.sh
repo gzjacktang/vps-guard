@@ -155,27 +155,31 @@ verify_sshd_committed_listeners() {
 }
 
 ensure_no_pending_ssh_migration() {
-  local root state_file status rollback_token rollback_file rollback_status token
-  root="$(ssh_migration_root)"
-  [[ -d "$root" ]] || return 0
-  for state_file in "$root"/*/state; do
-    [[ -r "$state_file" ]] || continue
-    status="$(read_state_value "$state_file" status | tail -1)"
-    case "$status" in
-      applying | pending)
-        rollback_token="$(read_state_value "$state_file" rollback | tail -1)"
-        rollback_file="$(rollback_state_dir "$rollback_token")/state"
-        rollback_status="$(read_state_value "$rollback_file" status 2>/dev/null | tail -1)"
-        case "$rollback_status" in
-          pending | running)
-            token="$(read_state_value "$state_file" token | tail -1)"
-            error "仍有未提交的 SSH 迁移：$token"
-            error "请从新端口会话执行 ssh confirm，或等待自动回滚"
-            return "$EXIT_CONFLICT"
-            ;;
-        esac
-        ;;
-    esac
+  local root state_file status rollback_token rollback_file rollback_status token kind
+  local roots=("$(ssh_migration_root)" "$(ssh_hardening_transaction_root)")
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    kind="SSH 迁移"
+    [[ "$root" != "$(ssh_hardening_transaction_root)" ]] || kind="SSH 加固"
+    for state_file in "$root"/*/state; do
+      [[ -r "$state_file" ]] || continue
+      status="$(read_state_value "$state_file" status | tail -1)"
+      case "$status" in
+        applying | pending)
+          rollback_token="$(read_state_value "$state_file" rollback | tail -1)"
+          rollback_file="$(rollback_state_dir "$rollback_token")/state"
+          rollback_status="$(read_state_value "$rollback_file" status 2>/dev/null | tail -1)"
+          case "$rollback_status" in
+            pending | running)
+              token="$(read_state_value "$state_file" token | tail -1)"
+              error "仍有未提交的 $kind：$token"
+              error "请从新的已验证 SSH 会话确认，或等待自动回滚"
+              return "$EXIT_CONFLICT"
+              ;;
+          esac
+          ;;
+      esac
+    done
   done
 }
 
@@ -325,6 +329,10 @@ abort_ssh_migration() {
 }
 
 start_ssh_port_migration() {
+  with_config_transaction_lock start_ssh_port_migration_unlocked "$@"
+}
+
+start_ssh_port_migration_unlocked() {
   local requested_port="$1"
   local rollback_minutes="$2"
   local confirmed="$3"
@@ -376,6 +384,7 @@ start_ssh_port_migration() {
   ensure_firewall_scope_owned_or_free || return $?
   ensure_no_pending_firewall_rollback || return $?
   ensure_no_pending_ssh_migration || return $?
+  ensure_no_pending_ssh_enrollment || return $?
   ensure_standard_ssh_dropin_include || return $?
   require_firewall_write_preflight || return $?
   sshd -t || {
@@ -636,6 +645,10 @@ create_ssh_restore_view() {
 }
 
 restore_ssh_from_snapshot() {
+  with_config_transaction_lock restore_ssh_from_snapshot_unlocked "$@"
+}
+
+restore_ssh_from_snapshot_unlocked() {
   local target_snapshot="$1"
   local rollback_minutes="$2"
   local confirmed="$3"
@@ -645,6 +658,7 @@ restore_ssh_from_snapshot() {
   ensure_firewall_scope_owned_or_free || return $?
   ensure_no_pending_firewall_rollback || return $?
   ensure_no_pending_ssh_migration || return $?
+  ensure_no_pending_ssh_enrollment || return $?
   require_firewall_write_preflight || return $?
 
   printf 'SSH 快照恢复摘要\n'
@@ -704,6 +718,18 @@ ssh_cli() {
   local action="${1:-}"
   local port="" rollback_minutes=5 confirmed=0 token snapshot
   case "$action" in
+    inspect)
+      shift
+      ssh_inspect_cli "$@"
+      ;;
+    key)
+      shift
+      ssh_key_cli "$@"
+      ;;
+    harden)
+      shift
+      ssh_hardening_cli "$@"
+      ;;
     migrate | reset-port-22)
       shift
       [[ "$action" != "reset-port-22" ]] || port=22
@@ -782,7 +808,7 @@ ssh_cli() {
       restore_ssh_from_snapshot "$snapshot" "$rollback_minutes" "$confirmed"
       ;;
     *)
-      error "用法：vps-guard ssh <migrate|confirm|status|reset-port-22|restore>"
+      error "用法：vps-guard ssh <inspect|key|harden|migrate|confirm|status|reset-port-22|restore>"
       return "$EXIT_USAGE"
       ;;
   esac

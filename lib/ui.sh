@@ -70,16 +70,43 @@ show_main_menu() {
 }
 
 show_ssh_menu() {
-  local choice port minutes token
+  local choice user token minutes
   while true; do
     printf 'SSH 管理\n'
-    printf '1. 迁移 SSH 端口\n'
-    printf '2. 从新端口会话确认迁移\n'
-    printf '3. 查看迁移状态\n'
-    printf '4. 重置端口到 22\n'
-    printf '5. 从快照恢复 SSH\n'
+    printf '1. 查看实际配置与风险\n'
+    printf '2. SSH 端口管理\n'
+    printf '3. SSH 密钥设置\n'
+    printf '4. 可选 SSH 加固\n'
+    printf '5. SSH 快照恢复\n'
     printf '0. 返回主菜单\n'
     printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1)
+        printf '目标用户：'
+        IFS= read -r user || return 0
+        inspect_ssh_effective_config "$user" || true
+        ;;
+      2) show_ssh_port_menu ;;
+      3) show_ssh_key_menu ;;
+      4) show_ssh_hardening_menu ;;
+      5)
+        printf '目标快照 ID：'
+        IFS= read -r token || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        restore_ssh_from_snapshot "$token" "${minutes:-5}" 0 || true
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
+}
+
+show_ssh_port_menu() {
+  local choice port minutes token
+  while true; do
+    printf 'SSH 端口管理\n1. 迁移端口\n2. 从新端口确认\n3. 查看迁移状态\n4. 重置到 22\n0. 返回\n请选择：'
     IFS= read -r choice || return 0
     case "$choice" in
       0) return 0 ;;
@@ -108,12 +135,82 @@ show_ssh_menu() {
           show_ssh_migration_status "$token" || true
         fi
         ;;
-      5)
-        printf '目标快照 ID：'
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
+}
+
+show_ssh_key_menu() {
+  local choice user file token
+  while true; do
+    printf 'SSH 密钥设置\n'
+    printf '1. 客户端 Ed25519 生成引导\n2. 导入并校验公钥\n3. 服务器端生成加密密钥（备用）\n'
+    printf '4. 从新密钥会话确认\n5. 查看状态\n6. 放弃待确认密钥\n0. 返回\n请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1 | 2 | 3)
+        printf '目标用户：'
+        IFS= read -r user || return 0
+        case "$choice" in
+          1) show_client_key_guide "$user" || true ;;
+          2)
+            printf '服务器上的公钥文件路径：'
+            IFS= read -r file || return 0
+            ssh_key_cli import --user "$user" --file "$file" || true
+            ;;
+          3) ssh_key_cli generate-server --user "$user" || true ;;
+        esac
+        ;;
+      4 | 5 | 6)
+        printf 'SSH 密钥令牌：'
         IFS= read -r token || return 0
+        case "$choice" in
+          4) confirm_ssh_key_enrollment "$token" || true ;;
+          5) show_ssh_key_status "$token" || true ;;
+          6) discard_ssh_key_enrollment "$token" || true ;;
+        esac
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
+}
+
+show_ssh_hardening_menu() {
+  local choice user proof password root empty tries grace minutes token
+  while true; do
+    printf '可选 SSH 加固\n1. 应用或调整加固\n2. 从新密钥会话确认\n3. 查看加固状态\n0. 返回\n请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1)
+        printf '目标确认用户：'
+        IFS= read -r user || return 0
+        printf '已验证密钥 proof（禁用密码时必填）：'
+        IFS= read -r proof || return 0
+        printf '密码登录 [keep/yes/no，默认keep]：'
+        IFS= read -r password || return 0
+        printf 'root 登录 [keep/yes/prohibit-password/no，默认keep]：'
+        IFS= read -r root || return 0
+        printf '空密码 [keep/yes/no，默认keep]：'
+        IFS= read -r empty || return 0
+        printf '认证重试 [keep/1-10，默认keep]：'
+        IFS= read -r tries || return 0
+        printf '登录等待秒数 [keep/10-120，默认keep]：'
+        IFS= read -r grace || return 0
         printf '自动回滚分钟数 [3/5/10，默认5]：'
         IFS= read -r minutes || return 0
-        restore_ssh_from_snapshot "$token" "${minutes:-5}" 0 || true
+        start_ssh_hardening "$user" "$proof" "${password:-keep}" "${root:-keep}" "${empty:-keep}" \
+          "${tries:-keep}" "${grace:-keep}" "${minutes:-5}" 0 || true
+        ;;
+      2 | 3)
+        printf 'SSH 加固令牌：'
+        IFS= read -r token || return 0
+        if [[ "$choice" == "2" ]]; then
+          confirm_ssh_hardening "$token" || true
+        else
+          show_ssh_hardening_status "$token" || true
+        fi
         ;;
       *) printf '无效选项，请重新输入。\n' ;;
     esac

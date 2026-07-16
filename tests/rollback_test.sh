@@ -100,6 +100,89 @@ test_timer_execution_restores_snapshot_and_is_idempotent() {
   assert_output_contains "当前配置与快照一致"
 }
 
+test_timer_waits_for_active_configuration_transaction() {
+  local snapshot_id token rollback_pid
+  setup_test_root
+  trap teardown_test_root RETURN
+
+  mkdir -p "$TEST_ROOT/fs/etc/ssh"
+  printf 'Port 22\n' >"$TEST_ROOT/fs/etc/ssh/sshd_config"
+  printf '/etc/ssh/sshd_config\n' >"$TEST_ROOT/managed-paths"
+  write_stub id 'printf "0\n"'
+  write_stub systemd-run 'exit 0'
+
+  run_vps_guard backup create --label serialized-rollback
+  snapshot_id="${COMMAND_OUTPUT#*快照已创建：}"
+  snapshot_id="${snapshot_id%%$'\n'*}"
+  run_vps_guard rollback start "$snapshot_id"
+  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
+  token="${token%%$'\n'*}"
+  printf 'Port 2222\n' >"$TEST_ROOT/fs/etc/ssh/sshd_config"
+
+  mkdir -p "$TEST_ROOT/data/.config-transaction.owner.test-wait"
+  printf '%s\n' "$$" >"$TEST_ROOT/data/.config-transaction.owner.test-wait/pid"
+  printf '%s\n' '.config-transaction.owner.test-wait' >"$TEST_ROOT/data/config-transaction.lock"
+  PATH="$TEST_ROOT/bin:$PATH" \
+    VPS_GUARD_FS_ROOT="$TEST_ROOT/fs" \
+    VPS_GUARD_DATA_DIR="$TEST_ROOT/data" \
+    VPS_GUARD_AUDIT_LOG="$TEST_ROOT/log/audit.log" \
+    VPS_GUARD_MANAGED_PATHS_FILE="$TEST_ROOT/managed-paths" \
+    "$PROJECT_ROOT/vps-guard.sh" rollback run "$token" >"$TEST_ROOT/rollback-wait.out" 2>&1 &
+  rollback_pid=$!
+  sleep 0.2
+  kill -0 "$rollback_pid"
+  grep -q 'Port 2222' "$TEST_ROOT/fs/etc/ssh/sshd_config"
+
+  rm -rf "$TEST_ROOT/data/config-transaction.lock"
+  wait "$rollback_pid"
+  grep -q '自动回滚完成' "$TEST_ROOT/rollback-wait.out"
+  grep -q 'Port 22' "$TEST_ROOT/fs/etc/ssh/sshd_config"
+}
+
+test_timer_lock_timeout_is_audited_and_stale_lock_is_retryable() {
+  local snapshot_id token
+  setup_test_root
+  trap teardown_test_root RETURN
+
+  mkdir -p "$TEST_ROOT/fs/etc/ssh"
+  printf 'Port 22\n' >"$TEST_ROOT/fs/etc/ssh/sshd_config"
+  printf '/etc/ssh/sshd_config\n' >"$TEST_ROOT/managed-paths"
+  write_stub id 'printf "0\n"'
+  write_stub systemd-run 'exit 0'
+  run_vps_guard backup create --label lock-timeout
+  snapshot_id="${COMMAND_OUTPUT#*快照已创建：}"
+  snapshot_id="${snapshot_id%%$'\n'*}"
+  run_vps_guard rollback start "$snapshot_id"
+  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
+  token="${token%%$'\n'*}"
+  printf 'Port 2222\n' >"$TEST_ROOT/fs/etc/ssh/sshd_config"
+
+  mkdir -p "$TEST_ROOT/data/.config-transaction.owner.test-timeout"
+  printf '%s\n' "$$" >"$TEST_ROOT/data/.config-transaction.owner.test-timeout/pid"
+  printf '%s\n' '.config-transaction.owner.test-timeout' >"$TEST_ROOT/data/config-transaction.lock"
+  set +e
+  COMMAND_OUTPUT="$(PATH="$TEST_ROOT/bin:$PATH" \
+    VPS_GUARD_FS_ROOT="$TEST_ROOT/fs" \
+    VPS_GUARD_DATA_DIR="$TEST_ROOT/data" \
+    VPS_GUARD_AUDIT_LOG="$TEST_ROOT/log/audit.log" \
+    VPS_GUARD_MANAGED_PATHS_FILE="$TEST_ROOT/managed-paths" \
+    VPS_GUARD_CONFIG_LOCK_WAIT_SECONDS=1 \
+    "$PROJECT_ROOT/vps-guard.sh" rollback run "$token" 2>&1)"
+  COMMAND_STATUS=$?
+  set -e
+  assert_status 3
+  assert_output_contains "systemd 将重试"
+  grep -q 'reason=config-transaction-lock' "$TEST_ROOT/log/audit.log"
+  grep -q 'Port 2222' "$TEST_ROOT/fs/etc/ssh/sshd_config"
+
+  rm -rf "$TEST_ROOT/data/config-transaction.lock"
+  : >"$TEST_ROOT/data/config-transaction.lock"
+  run_vps_guard rollback run "$token"
+  assert_status 0
+  assert_output_contains "自动回滚完成"
+  grep -q 'Port 22' "$TEST_ROOT/fs/etc/ssh/sshd_config"
+}
+
 test_dry_run_does_not_create_systemd_task_or_state() {
   local snapshot_id
   setup_test_root
@@ -194,6 +277,8 @@ test_dry_run_confirm_does_not_stop_or_change_pending_task() {
 test_user_can_schedule_and_query_rollback
 test_confirmation_cancels_pending_rollback_idempotently
 test_timer_execution_restores_snapshot_and_is_idempotent
+test_timer_waits_for_active_configuration_transaction
+test_timer_lock_timeout_is_audited_and_stale_lock_is_retryable
 test_dry_run_does_not_create_systemd_task_or_state
 test_concurrent_confirm_wins_over_timer_run
 test_dry_run_confirm_does_not_stop_or_change_pending_task

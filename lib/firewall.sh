@@ -257,7 +257,7 @@ ensure_no_pending_firewall_rollback() {
     [[ -r "$state_file" ]] || continue
     hook="$(read_state_value "$state_file" hook | tail -1)"
     case "$hook" in
-      firewall | ssh-firewall | ssh-restore) ;;
+      firewall | ssh-firewall | ssh-restore | ssh-hardening) ;;
       *) continue ;;
     esac
     status="$(read_state_value "$state_file" status | tail -1)"
@@ -379,6 +379,10 @@ remove_firewall_configuration() {
 }
 
 disable_firewall() {
+  with_config_transaction_lock disable_firewall_unlocked "$@"
+}
+
+disable_firewall_unlocked() {
   local rollback_minutes="$1"
   local confirmed="$2"
   local cleanup snapshot_output snapshot_id rollback_output runtime_table_present=0
@@ -391,6 +395,7 @@ disable_firewall() {
   require_nft_command || return $?
   ensure_firewall_scope_owned_or_free || return $?
   ensure_no_pending_firewall_rollback || return $?
+  ensure_no_pending_ssh_enrollment || return $?
   require_firewall_write_preflight || return $?
 
   cleanup="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-disable.XXXXXX")" || return "$EXIT_FAILURE"
@@ -461,6 +466,10 @@ disable_firewall() {
 }
 
 enable_firewall() {
+  with_config_transaction_lock enable_firewall_unlocked "$@"
+}
+
+enable_firewall_unlocked() {
   local tcp_input="$1"
   local udp_input="$2"
   local rollback_minutes="$3"
@@ -480,6 +489,7 @@ enable_firewall() {
   require_nft_command || return $?
   ensure_firewall_scope_owned_or_free || return $?
   ensure_no_pending_firewall_rollback || return $?
+  ensure_no_pending_ssh_enrollment || return $?
   require_firewall_write_preflight || return $?
   ssh_ports="$(current_ssh_ports)" || return $?
   candidate="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall.XXXXXX")" || return "$EXIT_FAILURE"
