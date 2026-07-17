@@ -30,6 +30,8 @@ VPS Guard 不修改 `FORWARD`、NAT、Docker/Podman/LXC/CNI/Kubernetes 链、VPN
 
 防火墙只拥有 `table inet vps_guard`、`/etc/nftables.d/vps-guard.nft`、`/etc/vps-guard/firewall.conf` 和 `/etc/nftables.conf` 中一条精确标记的 include。候选规则必须先通过 `nft -c`；确认后才创建快照并应用。应用失败、回滚调度失败或超时都会恢复磁盘配置并同步恢复内核中的自有表。
 
+高级规则以严格校验的原子记录保存在 root-only 状态文件中，不使用 `eval`。协议与双栈组合在写入前展开；接口、地址和端口均拒绝控制字符与 nftables 文本注入。出站 drop 前保留已建立/相关连接，降低当前管理会话被瞬间切断的风险，但新连接仍可能立即失败，因此回滚调度必须先于 live reload。
+
 `/etc/vps-guard/firewall.conf` 是防火墙所有权记录。没有有效状态文件时，即使发现的对象名称恰好是 `inet vps_guard`，也一律视为第三方或归属不明并返回冲突码 3，禁止接管。
 
 启用时同时保留当前 `SSH_CONNECTION` 服务端端口和 `sshd -T` 配置端口。存在未确认的防火墙事务时禁止叠加第二个事务。详细流程见 [nftables 防火墙说明](FIREWALL.md)。

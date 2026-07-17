@@ -210,10 +210,12 @@ exit 0
 }
 
 test_firewall_apply_failure_restores_snapshot_immediately() {
-  local before apply_counter
+  local before apply_counter token
   setup_firewall_test
   trap teardown_test_root RETURN
   before="$(<"$TEST_ROOT/fs/etc/nftables.conf")"
+  write_stub systemd-run 'exit 0'
+  write_stub systemctl 'exit 0'
   apply_counter="$TEST_ROOT/apply-counter"
   write_stub nft "
 printf '%s\\n' \"\$*\" >>'$TEST_ROOT/nft.log'
@@ -240,11 +242,13 @@ exit 0
   [[ "$(<"$TEST_ROOT/fs/etc/nftables.conf")" == "$before" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/vps-guard/firewall.conf" ]]
-  [[ ! -d "$TEST_ROOT/data/rollbacks" ]]
+  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
+  token="${token%%$'\n'*}"
+  grep -q '^status=confirmed$' "$TEST_ROOT/data/rollbacks/$token/state"
   run_vps_guard audit list
   assert_output_contains "action=firewall.enable"
   assert_output_contains "result=failure"
-  assert_output_contains "reason=apply"
+  assert_output_contains "reason=runtime-apply"
 }
 
 test_firewall_rollback_schedule_failure_restores_immediately() {
@@ -416,7 +420,7 @@ exit 0
   assert_output_contains "受保护 SSH TCP：2222"
   assert_output_contains "额外 TCP：80"
   assert_output_contains "额外 UDP：53"
-  assert_output_contains "公网可达性：未验证"
+  assert_output_contains "外部可达性：未验证"
 }
 
 test_firewall_conflict_is_blocked_before_snapshot_or_write() {
@@ -465,13 +469,13 @@ exit 0
   [[ ! -d "$TEST_ROOT/data/rollbacks" ]]
 }
 
-test_firewall_rejects_advanced_or_invalid_basic_inputs() {
+test_firewall_accepts_ranges_and_rejects_invalid_inputs() {
   setup_firewall_test
   trap teardown_test_root RETURN
 
-  run_vps_guard firewall enable --tcp 80-90 --yes
-  assert_status 2
-  assert_output_contains "TCP 端口只支持"
+  run_vps_guard --dry-run firewall enable --tcp 80-90 --yes
+  assert_status 0
+  assert_output_contains "开放 TCP：80-90"
 
   run_vps_guard --dry-run firewall enable --tcp 080,80 --yes
   assert_status 0
@@ -479,7 +483,7 @@ test_firewall_rejects_advanced_or_invalid_basic_inputs() {
 
   run_vps_guard firewall enable --udp 0,65536 --yes
   assert_status 2
-  assert_output_contains "UDP 端口只支持"
+  assert_output_contains "UDP 端口支持"
 
   run_vps_guard firewall enable --tcp 80 --rollback-minutes 7 --yes
   assert_status 2
@@ -554,7 +558,7 @@ test_firewall_disable_succeeds_when_managed_runtime_table_is_already_absent
 test_firewall_status_reports_configured_and_runtime_state
 test_firewall_conflict_is_blocked_before_snapshot_or_write
 test_firewall_refuses_unowned_vps_guard_table_name_collision
-test_firewall_rejects_advanced_or_invalid_basic_inputs
+test_firewall_accepts_ranges_and_rejects_invalid_inputs
 test_firewall_blocks_overlapping_pending_transactions
 test_firewall_enable_without_confirmation_cancels_safely
 test_firewall_update_and_disable_dry_runs_do_not_change_state

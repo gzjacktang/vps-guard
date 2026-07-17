@@ -15,12 +15,13 @@ vps-guard preflight
 ```text
 vps-guard firewall status
 vps-guard firewall enable [--tcp 端口列表] [--udp 端口列表] [--rollback-minutes 3|5|10] [--yes]
-vps-guard firewall open --ports 端口列表 --protocol tcp|udp|both [--rollback-minutes 3|5|10] [--yes]
-vps-guard firewall close --ports 端口列表 --protocol tcp|udp|both [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall open --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall close --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--rollback-minutes 3|5|10] [--yes]
 vps-guard firewall disable [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall status --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--external-confirm reachable|blocked]
 ```
 
-基础端口只支持单值和逗号列表。所有写入先做冲突预检、规则摘要、语法检查和快照，并默认创建 5 分钟回滚。应用后必须从新 SSH 会话验证，再执行 `rollback confirm <令牌>`。完整规则、安全边界、兼容策略和恢复流程见 [nftables 防火墙说明](FIREWALL.md)。
+端口表达式支持单值、逗号列表、范围和混合格式。未指定高级维度时保持入站、双栈、所有来源兼容行为；显式维度进入高级路径。入站关闭撤销受管放行，出站关闭新增显式 drop，并给出 DNS/APT 等强警告。所有写入先做冲突预检、规则摘要、语法检查和快照，并在 live reload 前创建默认 5 分钟回滚。过滤状态分别报告自有规则、本机监听进程和用户提供的外部验证证据。完整说明见 [nftables 防火墙说明](FIREWALL.md)。
 
 ## SSH 端口迁移
 

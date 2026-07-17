@@ -9,35 +9,8 @@ firewall_state_path() {
 }
 
 normalize_basic_ports() {
-  local input="$1"
-  local compact port numeric seen=" "
-  local ports=()
-  compact="$(printf '%s' "$input" | tr -d '[:space:]')"
-  [[ -z "$compact" ]] && return 0
-  [[ "$compact" != ,* && "$compact" != *, && "$compact" != *,,* ]] || return "$EXIT_USAGE"
-
-  local old_ifs="$IFS"
-  IFS=,
-  for port in $compact; do
-    [[ "$port" =~ ^[0-9]{1,5}$ ]] || {
-      IFS="$old_ifs"
-      return "$EXIT_USAGE"
-    }
-    numeric=$((10#$port))
-    [[ "$numeric" -ge 1 && "$numeric" -le 65535 ]] || {
-      IFS="$old_ifs"
-      return "$EXIT_USAGE"
-    }
-    port="$numeric"
-    if [[ "$seen" != *" $port "* ]]; then
-      ports+=("$port")
-      seen+="$port "
-    fi
-  done
-  IFS="$old_ifs"
-  if [[ "${#ports[@]}" -gt 0 ]]; then
-    printf '%s\n' "${ports[@]}" | sort -n | paste -sd, -
-  fi
+  [[ -n "$1" ]] || return 0
+  firewall_rules_normalize_ports "$1"
 }
 
 effective_sshd_ports() {
@@ -94,29 +67,15 @@ merge_basic_ports() {
 }
 
 remove_basic_ports() {
-  local existing="$1"
-  local removing="$2"
-  local port remove_port keep
-  local kept=()
-  local old_ifs="$IFS"
-  IFS=,
-  for port in $existing; do
-    keep=1
-    for remove_port in $removing; do
-      if [[ "$port" == "$remove_port" ]]; then
-        keep=0
-        break
-      fi
-    done
-    [[ "$keep" -eq 0 ]] || kept+=("$port")
-  done
-  IFS="$old_ifs"
-  if [[ "${#kept[@]}" -gt 0 ]]; then
-    normalize_basic_ports "$(
-      IFS=,
-      printf '%s' "${kept[*]}"
-    )"
-  fi
+  [[ -n "$1" ]] || return 0
+  firewall_rules_interval_difference "$1" "$2"
+}
+
+firewall_advanced_state_records() {
+  local state_path
+  state_path="$(firewall_state_path)"
+  [[ -r "$state_path" ]] || return 0
+  sed -n 's/^rule=//p' "$state_path"
 }
 
 firewall_state_value() {
@@ -141,7 +100,7 @@ render_firewall_ruleset() {
   local ssh_ports="$2"
   local tcp_ports="$3"
   local udp_ports="$4"
-  local all_tcp
+  local advanced_rules="${5:-}" all_tcp record expression
   all_tcp="$(merge_basic_ports "$ssh_ports" "$tcp_ports")"
 
   {
@@ -154,9 +113,20 @@ render_firewall_ruleset() {
     printf '    meta l4proto ipv6-icmp accept\n'
     [[ -z "$all_tcp" ]] || printf '    tcp dport { %s } accept\n' "$(comma_ports_to_nft_set "$all_tcp")"
     [[ -z "$udp_ports" ]] || printf '    udp dport { %s } accept\n' "$(comma_ports_to_nft_set "$udp_ports")"
+    while IFS= read -r record; do
+      [[ -n "$record" && "$record" == *'|input|'* ]] || continue
+      expression="$(firewall_rules_render_nft "$record")" || return "$EXIT_FAILURE"
+      printf '    %s\n' "$expression"
+    done <<<"$advanced_rules"
     printf '  }\n'
     printf '  chain output {\n'
     printf '    type filter hook output priority 0; policy accept;\n'
+    printf '    ct state established,related accept\n'
+    while IFS= read -r record; do
+      [[ -n "$record" && "$record" == *'|output|'* ]] || continue
+      expression="$(firewall_rules_render_nft "$record")" || return "$EXIT_FAILURE"
+      printf '    %s\n' "$expression"
+    done <<<"$advanced_rules"
     printf '  }\n'
     printf '}\n'
   } >"$destination"
@@ -317,6 +287,7 @@ install_firewall_configuration() {
   local ssh_ports="$2"
   local tcp_ports="$3"
   local udp_ports="$4"
+  local advanced_rules="${5:-}" record
   local config_path state_path
   config_path="$(firewall_config_path)"
   state_path="$(firewall_state_path)"
@@ -326,10 +297,14 @@ install_firewall_configuration() {
   chmod 0700 "$(dirname "$state_path")" || return "$EXIT_FAILURE"
   cp "$candidate" "$config_path" || return "$EXIT_FAILURE"
   chmod 0600 "$config_path" || return "$EXIT_FAILURE"
-  if ! printf 'enabled=1\nssh_ports=%s\ntcp_ports=%s\nudp_ports=%s\n' \
+  if ! printf 'format=2\nenabled=1\nssh_ports=%s\ntcp_ports=%s\nudp_ports=%s\n' \
     "$ssh_ports" "$tcp_ports" "$udp_ports" >"$state_path"; then
     return "$EXIT_FAILURE"
   fi
+  while IFS= read -r record; do
+    [[ -n "$record" ]] || continue
+    printf 'rule=%s\n' "$record" >>"$state_path" || return "$EXIT_FAILURE"
+  done <<<"$advanced_rules"
   chmod 0600 "$state_path" || return "$EXIT_FAILURE"
 
   ensure_firewall_include_line
@@ -337,16 +312,17 @@ install_firewall_configuration() {
 
 apply_managed_firewall_ssh_ports() {
   local ssh_ports="$1"
-  local tcp_ports udp_ports candidate
+  local tcp_ports udp_ports advanced_rules candidate
   require_firewall_enabled || return $?
   ssh_ports="$(normalize_basic_ports "$ssh_ports")" || return $?
   [[ -n "$ssh_ports" ]] || return "$EXIT_USAGE"
   tcp_ports="$(firewall_state_value tcp_ports)"
   udp_ports="$(firewall_state_value udp_ports)"
+  advanced_rules="$(firewall_advanced_state_records)" || return $?
   candidate="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall-ssh.XXXXXX")" || return "$EXIT_FAILURE"
-  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
+  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" "$advanced_rules" ||
     ! validate_firewall_candidate "$candidate" ||
-    ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
+    ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" "$advanced_rules" ||
     ! reload_firewall_runtime; then
     rm -f "$candidate" || true
     return "$EXIT_FAILURE"
@@ -373,6 +349,25 @@ restore_firewall_snapshot() {
   restore_snapshot "$snapshot_id" 1 && reload_firewall_runtime
 }
 
+recover_failed_firewall_change() {
+  local snapshot_id="$1" rollback_token="${2:-}"
+  if restore_firewall_snapshot "$snapshot_id"; then
+    if [[ -n "$rollback_token" ]]; then
+      confirm_rollback "$rollback_token" 1 >/dev/null 2>&1 || {
+        error "防火墙已恢复，但无法取消自动回滚；任务仍保留"
+        return "$EXIT_FAILURE"
+      }
+    fi
+    return 0
+  fi
+  if [[ -n "$rollback_token" ]]; then
+    error "防火墙立即恢复失败；自动回滚任务仍保留，请勿确认"
+  else
+    error "防火墙立即恢复失败，请从控制台恢复快照：$snapshot_id"
+  fi
+  return "$EXIT_FAILURE"
+}
+
 remove_firewall_configuration() {
   remove_firewall_include_line || return $?
   rm -f "$(firewall_config_path)" "$(firewall_state_path)"
@@ -385,7 +380,7 @@ disable_firewall() {
 disable_firewall_unlocked() {
   local rollback_minutes="$1"
   local confirmed="$2"
-  local cleanup snapshot_output snapshot_id rollback_output runtime_table_present=0
+  local cleanup snapshot_output snapshot_id rollback_output rollback_token runtime_table_present=0
 
   validate_rollback_minutes "$rollback_minutes" || return $?
   if ! require_firewall_enabled 2>/dev/null; then
@@ -446,21 +441,31 @@ disable_firewall_unlocked() {
   printf '%s\n' "$snapshot_output"
   snapshot_id="${snapshot_output#*快照已创建：}"
   snapshot_id="${snapshot_id%%$'\n'*}"
-  if ! nft -f "$cleanup" || ! remove_firewall_configuration; then
+  if ! remove_firewall_configuration; then
     rm -f "$cleanup" || true
-    restore_firewall_snapshot "$snapshot_id" || true
+    recover_failed_firewall_change "$snapshot_id" || true
     audit_event firewall.disable failure "snapshot=$snapshot_id reason=apply"
     error "防火墙停用失败，已尝试恢复快照"
     return "$EXIT_FAILURE"
   fi
-  rm -f "$cleanup" || true
   if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
-    restore_firewall_snapshot "$snapshot_id" || true
+    rm -f "$cleanup" || true
+    recover_failed_firewall_change "$snapshot_id" || true
     audit_event firewall.disable failure "snapshot=$snapshot_id reason=rollback-schedule"
     error "无法安排自动回滚，已尝试恢复原防火墙"
     return "$EXIT_FAILURE"
   fi
   printf '%s\n' "$rollback_output"
+  rollback_token="${rollback_output#*自动回滚已启动：}"
+  rollback_token="${rollback_token%%$'\n'*}"
+  if ! nft -f "$cleanup"; then
+    rm -f "$cleanup" || true
+    recover_failed_firewall_change "$snapshot_id" "$rollback_token" || true
+    audit_event firewall.disable failure "snapshot=$snapshot_id reason=runtime-apply"
+    error "防火墙停用失败，已尝试恢复快照"
+    return "$EXIT_FAILURE"
+  fi
+  rm -f "$cleanup" || true
   audit_event firewall.disable success "snapshot=$snapshot_id minutes=$rollback_minutes"
   printf 'VPS Guard 防火墙已停用。所有端口将由其他防火墙和上游网络策略决定；确认正常后执行 rollback confirm。\n'
 }
@@ -475,15 +480,16 @@ enable_firewall_unlocked() {
   local rollback_minutes="$3"
   local confirmed="$4"
   local operation="${5:-enable}"
-  local tcp_ports udp_ports ssh_ports candidate snapshot_output snapshot_id rollback_output
+  local advanced_rules="${6:-}"
+  local tcp_ports udp_ports ssh_ports candidate snapshot_output snapshot_id rollback_output rollback_token note
 
   validate_rollback_minutes "$rollback_minutes" || return $?
   if ! tcp_ports="$(normalize_basic_ports "$tcp_input")"; then
-    error "TCP 端口只支持 1-65535 的单端口或逗号列表"
+    error "TCP 端口支持 1-65535 的单端口、列表、范围或混合格式"
     return "$EXIT_USAGE"
   fi
   if ! udp_ports="$(normalize_basic_ports "$udp_input")"; then
-    error "UDP 端口只支持 1-65535 的单端口或逗号列表"
+    error "UDP 端口支持 1-65535 的单端口、列表、范围或混合格式"
     return "$EXIT_USAGE"
   fi
   require_nft_command || return $?
@@ -493,13 +499,21 @@ enable_firewall_unlocked() {
   require_firewall_write_preflight || return $?
   ssh_ports="$(current_ssh_ports)" || return $?
   candidate="$(mktemp "${TMPDIR:-/tmp}/vps-guard-firewall.XXXXXX")" || return "$EXIT_FAILURE"
-  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports"; then
+  if ! render_firewall_ruleset "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" "$advanced_rules"; then
     rm -f "$candidate" || true
     error "无法生成 nftables 候选配置"
     return "$EXIT_FAILURE"
   fi
 
   show_firewall_summary "$ssh_ports" "$tcp_ports" "$udp_ports"
+  if [[ -n "$tcp_input" ]]; then
+    note="$(firewall_rules_port_normalization_note "$tcp_input")" || return $?
+    [[ -z "$note" ]] || printf 'TCP %s' "$note"
+  fi
+  if [[ -n "$udp_input" ]]; then
+    note="$(firewall_rules_port_normalization_note "$udp_input")" || return $?
+    [[ -z "$note" ]] || printf 'UDP %s' "$note"
+  fi
   if ! validate_firewall_candidate "$candidate"; then
     rm -f "$candidate" || true
     error "nftables 语法检查失败，未写入任何配置"
@@ -533,10 +547,9 @@ enable_firewall_unlocked() {
   snapshot_id="${snapshot_output#*快照已创建：}"
   snapshot_id="${snapshot_id%%$'\n'*}"
 
-  if ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" ||
-    ! reload_firewall_runtime; then
+  if ! install_firewall_configuration "$candidate" "$ssh_ports" "$tcp_ports" "$udp_ports" "$advanced_rules"; then
     rm -f "$candidate" || true
-    restore_firewall_snapshot "$snapshot_id" || true
+    recover_failed_firewall_change "$snapshot_id" || true
     audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=apply"
     error "防火墙应用失败，已尝试恢复快照"
     return "$EXIT_FAILURE"
@@ -544,12 +557,20 @@ enable_firewall_unlocked() {
   rm -f "$candidate" || true
 
   if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
-    restore_firewall_snapshot "$snapshot_id" || true
+    recover_failed_firewall_change "$snapshot_id" || true
     audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=rollback-schedule"
     error "无法安排自动回滚，已尝试恢复原防火墙"
     return "$EXIT_FAILURE"
   fi
   printf '%s\n' "$rollback_output"
+  rollback_token="${rollback_output#*自动回滚已启动：}"
+  rollback_token="${rollback_token%%$'\n'*}"
+  if ! reload_firewall_runtime; then
+    recover_failed_firewall_change "$snapshot_id" "$rollback_token" || true
+    audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=runtime-apply"
+    error "防火墙应用失败，已尝试恢复快照"
+    return "$EXIT_FAILURE"
+  fi
   audit_event "firewall.$operation" success "snapshot=$snapshot_id minutes=$rollback_minutes"
   case "$operation" in
     enable) printf '防火墙已启用。' ;;
@@ -565,11 +586,11 @@ change_firewall_ports() {
   local protocol="$3"
   local rollback_minutes="$4"
   local confirmed="$5"
-  local ports tcp_ports udp_ports new_tcp new_udp
+  local ports tcp_ports udp_ports new_tcp new_udp advanced_rules note
 
   require_firewall_enabled || return $?
   if ! ports="$(normalize_basic_ports "$ports_input")" || [[ -z "$ports" ]]; then
-    error "端口只支持 1-65535 的单端口或逗号列表"
+    error "端口支持 1-65535 的单端口、列表、范围或混合格式"
     return "$EXIT_USAGE"
   fi
   case "$protocol" in
@@ -581,6 +602,9 @@ change_firewall_ports() {
   esac
   tcp_ports="$(firewall_state_value tcp_ports)"
   udp_ports="$(firewall_state_value udp_ports)"
+  advanced_rules="$(firewall_advanced_state_records)" || return $?
+  note="$(firewall_rules_port_normalization_note "$ports_input")" || return $?
+  [[ -z "$note" ]] || printf '%s' "$note"
   new_tcp="$tcp_ports"
   new_udp="$udp_ports"
 
@@ -604,15 +628,20 @@ change_firewall_ports() {
     fi
     if [[ "$new_tcp" == "$tcp_ports" && "$new_udp" == "$udp_ports" ]]; then
       printf '指定端口已经关闭，无需重复操作。\n'
+      warn_if_firewall_ports_listening "$ports" "$protocol"
       return 0
     fi
   fi
 
-  enable_firewall "$new_tcp" "$new_udp" "$rollback_minutes" "$confirmed" "$mode"
+  enable_firewall "$new_tcp" "$new_udp" "$rollback_minutes" "$confirmed" "$mode" "$advanced_rules" || return $?
+  if [[ "$mode" == close && "$(firewall_state_value tcp_ports)" == "$new_tcp" &&
+  "$(firewall_state_value udp_ports)" == "$new_udp" ]]; then
+    warn_if_firewall_ports_listening "$ports" "$protocol"
+  fi
 }
 
 show_firewall_status() {
-  local state_path ssh_ports tcp_ports udp_ports
+  local state_path ssh_ports tcp_ports udp_ports advanced_rules listeners
   state_path="$(firewall_state_path)"
   require_nft_command || return $?
   printf 'VPS Guard 防火墙状态\n'
@@ -623,7 +652,12 @@ show_firewall_status() {
       return "$EXIT_FAILURE"
     fi
     printf '内核运行时：未加载\n'
-    printf '公网可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
+    if command_exists ss && listeners="$(firewall_listener_lines 2>/dev/null)"; then
+      [[ -n "$listeners" ]] && printf '本机监听进程：\n%s\n' "$listeners" || printf '本机监听进程：未发现\n'
+    else
+      printf '本机监听进程：未知（ss 状态不可读）\n'
+    fi
+    printf '外部可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
     return 0
   fi
 
@@ -640,12 +674,28 @@ show_firewall_status() {
   printf '受保护 SSH TCP：%s\n' "$ssh_ports"
   printf '额外 TCP：%s\n' "${tcp_ports:-无}"
   printf '额外 UDP：%s\n' "${udp_ports:-无}"
-  printf '公网可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
+  advanced_rules="$(firewall_advanced_valid_records)" || return $?
+  if [[ -n "$advanced_rules" ]]; then
+    printf '高级规则（动作|方向|协议|地址族|端口|来源|接口）：\n%s\n' "$advanced_rules"
+  else
+    printf '高级规则：无\n'
+  fi
+  if ! command_exists ss; then
+    printf '本机监听进程：未知（缺少 ss）\n'
+  elif ! listeners="$(firewall_listener_lines 2>/dev/null)"; then
+    printf '本机监听进程：未知（ss 状态不可读）\n'
+  elif [[ -n "$listeners" ]]; then
+    printf '本机监听进程：\n%s\n' "$listeners"
+  else
+    printf '本机监听进程：未发现\n'
+  fi
+  printf '外部可达性：未验证（仍受云安全组、NAT 和上游防火墙影响）\n'
 }
 
 firewall_cli() {
   local action="${1:-}"
   local tcp_ports="" udp_ports="" ports="" protocol="" rollback_minutes=5 confirmed=0
+  local direction=inbound family=dual source=all interface="" external=unverified advanced=0
   case "$action" in
     enable)
       shift
@@ -692,6 +742,30 @@ firewall_cli() {
             protocol="$2"
             shift 2
             ;;
+          --direction)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            direction="$2"
+            advanced=1
+            shift 2
+            ;;
+          --family)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            family="$2"
+            advanced=1
+            shift 2
+            ;;
+          --source)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            source="$2"
+            advanced=1
+            shift 2
+            ;;
+          --interface)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            interface="$2"
+            advanced=1
+            shift 2
+            ;;
           --rollback-minutes)
             [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
             rollback_minutes="$2"
@@ -711,7 +785,11 @@ firewall_cli() {
         error "用法：vps-guard firewall $action --ports 列表 --protocol tcp|udp|both"
         return "$EXIT_USAGE"
       }
-      change_firewall_ports "$action" "$ports" "$protocol" "$rollback_minutes" "$confirmed"
+      if [[ "$advanced" -eq 1 || "$direction" == outbound ]]; then
+        change_advanced_firewall_rule "$action" "$ports" "$protocol" "$direction" "$family" "$source" "$interface" "$rollback_minutes" "$confirmed"
+      else
+        change_firewall_ports "$action" "$ports" "$protocol" "$rollback_minutes" "$confirmed"
+      fi
       ;;
     disable)
       shift
@@ -735,11 +813,63 @@ firewall_cli() {
       disable_firewall "$rollback_minutes" "$confirmed"
       ;;
     status)
-      [[ "$#" -eq 1 ]] || {
-        error "firewall status 不接受额外参数"
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        show_firewall_status
+        return $?
+      fi
+      while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+          --ports)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            ports="$2"
+            shift 2
+            ;;
+          --protocol)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            protocol="$2"
+            shift 2
+            ;;
+          --direction)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            direction="$2"
+            shift 2
+            ;;
+          --family)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            family="$2"
+            shift 2
+            ;;
+          --source)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            source="$2"
+            shift 2
+            ;;
+          --interface)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            interface="$2"
+            shift 2
+            ;;
+          --external-confirm)
+            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+            external="$2"
+            shift 2
+            ;;
+          *)
+            error "firewall status 未知参数：$1"
+            return "$EXIT_USAGE"
+            ;;
+        esac
+      done
+      [[ -n "$ports" && -n "$protocol" ]] || {
+        error "过滤状态必须指定 --ports 与 --protocol"
         return "$EXIT_USAGE"
       }
-      show_firewall_status
+      case "$protocol" in tcp | udp | both) ;; *) return "$EXIT_USAGE" ;; esac
+      case "$direction" in inbound | outbound) ;; *) return "$EXIT_USAGE" ;; esac
+      case "$family" in ipv4 | ipv6 | dual) ;; *) return "$EXIT_USAGE" ;; esac
+      case "$external" in unverified | reachable | blocked) ;; *) return "$EXIT_USAGE" ;; esac
+      show_firewall_port_status "$ports" "$protocol" "$direction" "$family" "$source" "$interface" "$external"
       ;;
     *)
       error "用法：vps-guard firewall <enable|disable|open|close|status>"

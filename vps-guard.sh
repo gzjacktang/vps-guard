@@ -18,8 +18,12 @@ source "$VPS_GUARD_ROOT/lib/ui.sh"
 source "$VPS_GUARD_ROOT/lib/backup.sh"
 # shellcheck source=lib/rollback.sh
 source "$VPS_GUARD_ROOT/lib/rollback.sh"
+# shellcheck source=lib/firewall_rules.sh
+source "$VPS_GUARD_ROOT/lib/firewall_rules.sh"
 # shellcheck source=lib/firewall.sh
 source "$VPS_GUARD_ROOT/lib/firewall.sh"
+# shellcheck source=lib/firewall_advanced.sh
+source "$VPS_GUARD_ROOT/lib/firewall_advanced.sh"
 # shellcheck source=lib/ssh.sh
 source "$VPS_GUARD_ROOT/lib/ssh.sh"
 # shellcheck source=lib/ssh_hardening.sh
