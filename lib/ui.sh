@@ -220,7 +220,7 @@ show_ssh_hardening_menu() {
 }
 
 show_firewall_menu() {
-  local choice ports protocol tcp_ports udp_ports minutes
+  local choice ports protocol tcp_ports udp_ports
   while true; do
     printf '防火墙管理\n'
     printf '1. 查看状态\n'
@@ -240,28 +240,22 @@ show_firewall_menu() {
         IFS= read -r tcp_ports || return 0
         printf '额外 UDP 端口（逗号列表，可留空）：'
         IFS= read -r udp_ports || return 0
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
-        enable_firewall "$tcp_ports" "$udp_ports" "${minutes:-5}" 0 || true
+        enable_firewall "$tcp_ports" "$udp_ports" 0 0 || true
         ;;
       3 | 4)
         printf '端口（单个或逗号列表）：'
         IFS= read -r ports || return 0
         printf '协议 [tcp/udp/both]：'
         IFS= read -r protocol || return 0
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
         if [[ "$choice" == "3" ]]; then
-          change_firewall_ports open "$ports" "$protocol" "${minutes:-5}" 0 || true
+          change_firewall_ports open "$ports" "$protocol" 0 0 || true
         else
-          change_firewall_ports close "$ports" "$protocol" "${minutes:-5}" 0 || true
+          change_firewall_ports close "$ports" "$protocol" 0 0 || true
         fi
         ;;
       5)
         printf '警告：停用后 VPS Guard 不再过滤任何端口。\n'
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
-        disable_firewall "${minutes:-5}" 0 || true
+        disable_firewall 0 0 || true
         ;;
       6) show_advanced_firewall_menu ;;
       *) printf '无效选项，请重新输入。\n' ;;
@@ -270,7 +264,7 @@ show_firewall_menu() {
 }
 
 show_advanced_firewall_menu() {
-  local choice mode ports protocol direction family source interface minutes external
+  local choice mode ports protocol direction family source interface external
   while true; do
     printf '高级防火墙\n1. 开放高级规则\n2. 关闭高级规则\n3. 查询三层端口状态\n0. 返回\n请选择：'
     IFS= read -r choice || return 0
@@ -290,10 +284,8 @@ show_advanced_firewall_menu() {
         IFS= read -r source || return 0
         printf '接口（留空表示全部；入站iifname/出站oifname）：'
         IFS= read -r interface || return 0
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
         change_advanced_firewall_rule "$mode" "$ports" "$protocol" "${direction:-inbound}" \
-          "${family:-dual}" "${source:-all}" "$interface" "${minutes:-5}" 0 || true
+          "${family:-dual}" "${source:-all}" "$interface" 0 0 || true
         ;;
       3)
         printf '端口（单值/列表/范围/混合）：'
@@ -401,7 +393,7 @@ show_help() {
 }
 
 show_lifecycle_menu() {
-  local choice answer proof
+  local choice
   while true; do
     printf '设置、更新与卸载\n'
     printf '1. 查看程序版本\n'
@@ -415,18 +407,13 @@ show_lifecycle_menu() {
       0) return 0 ;;
       1) show_vps_guard_version ;;
       2) check_for_update || true ;;
-      3) uninstall_vps_guard 0 0 "" || true ;;
+      3)
+        uninstall_vps_guard 0 0
+        return 0
+        ;;
       4)
-        printf '第一次警告：程序卸载后，现有 SSH/nftables/Fail2ban 配置仍会保留。继续查看数据清理计划？[y/N] '
-        IFS= read -r answer || answer=""
-        case "$answer" in y | Y | yes | YES) ;; *)
-          printf '已取消。\n'
-          continue
-          ;;
-        esac
-        printf '第二次确认将要求输入固定短语。\n'
-        proof=""
-        uninstall_vps_guard 1 1 "$proof" || true
+        uninstall_vps_guard 0 1
+        return 0
         ;;
       *) printf '无效选项，请重新输入。\n' ;;
     esac
@@ -434,7 +421,7 @@ show_lifecycle_menu() {
 }
 
 show_fail2ban_menu() {
-  local choice preset ip minutes snapshot findtime maxretry bantime increment maxtime
+  local choice preset ip snapshot findtime maxretry bantime increment maxtime
   while true; do
     printf 'Fail2ban 管理\n1. 安装 Fail2ban\n2. 应用 SSH 防护策略\n3. 查看状态\n4. 查看封禁列表\n5. 解封 IP\n6. 停用自有配置\n7. 从快照恢复自有配置\n0. 返回\n请选择：'
     IFS= read -r choice || return 0
@@ -470,16 +457,12 @@ show_fail2ban_menu() {
         unban_fail2ban_ip "$ip" || true
         ;;
       6)
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
-        disable_fail2ban "${minutes:-5}" 0 || true
+        disable_fail2ban 0 0 || true
         ;;
       7)
         printf '快照 ID：'
         IFS= read -r snapshot || return 0
-        printf '自动回滚分钟数 [3/5/10，默认5]：'
-        IFS= read -r minutes || return 0
-        restore_fail2ban_from_snapshot "$snapshot" "${minutes:-5}" 0 || true
+        restore_fail2ban_from_snapshot "$snapshot" 0 0 || true
         ;;
       *) printf '无效选项，请重新输入。\n' ;;
     esac

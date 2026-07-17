@@ -177,6 +177,10 @@ validate_rollback_minutes() {
   esac
 }
 
+firewall_validate_optional_rollback() {
+  [[ "$1" == 0 ]] || validate_rollback_minutes "$1"
+}
+
 require_nft_command() {
   if ! command_exists nft; then
     error "缺少 nft 命令，请先安装 Debian/Ubuntu 官方 nftables 软件包"
@@ -380,9 +384,9 @@ disable_firewall() {
 disable_firewall_unlocked() {
   local rollback_minutes="$1"
   local confirmed="$2"
-  local cleanup snapshot_output snapshot_id rollback_output rollback_token runtime_table_present=0
+  local cleanup snapshot_output snapshot_id rollback_output="" rollback_token="" runtime_table_present=0
 
-  validate_rollback_minutes "$rollback_minutes" || return $?
+  firewall_validate_optional_rollback "$rollback_minutes" || return $?
   if ! require_firewall_enabled 2>/dev/null; then
     printf 'VPS Guard 防火墙已经停用，无需重复操作。\n'
     return 0
@@ -421,7 +425,7 @@ disable_firewall_unlocked() {
     return 0
   fi
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '确认停用并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+    printf '确认停用防火墙？[y/N] '
     IFS= read -r answer
     case "$answer" in
       y | Y | yes | YES) ;;
@@ -448,16 +452,18 @@ disable_firewall_unlocked() {
     error "防火墙停用失败，已尝试恢复快照"
     return "$EXIT_FAILURE"
   fi
-  if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
-    rm -f "$cleanup" || true
-    recover_failed_firewall_change "$snapshot_id" || true
-    audit_event firewall.disable failure "snapshot=$snapshot_id reason=rollback-schedule"
-    error "无法安排自动回滚，已尝试恢复原防火墙"
-    return "$EXIT_FAILURE"
+  if [[ "$rollback_minutes" != 0 ]]; then
+    if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
+      rm -f "$cleanup" || true
+      recover_failed_firewall_change "$snapshot_id" || true
+      audit_event firewall.disable failure "snapshot=$snapshot_id reason=rollback-schedule"
+      error "无法安排自动回滚，已尝试恢复原防火墙"
+      return "$EXIT_FAILURE"
+    fi
+    printf '%s\n' "$rollback_output"
+    rollback_token="${rollback_output#*自动回滚已启动：}"
+    rollback_token="${rollback_token%%$'\n'*}"
   fi
-  printf '%s\n' "$rollback_output"
-  rollback_token="${rollback_output#*自动回滚已启动：}"
-  rollback_token="${rollback_token%%$'\n'*}"
   if ! nft -f "$cleanup"; then
     rm -f "$cleanup" || true
     recover_failed_firewall_change "$snapshot_id" "$rollback_token" || true
@@ -467,7 +473,7 @@ disable_firewall_unlocked() {
   fi
   rm -f "$cleanup" || true
   audit_event firewall.disable success "snapshot=$snapshot_id minutes=$rollback_minutes"
-  printf 'VPS Guard 防火墙已停用。所有端口将由其他防火墙和上游网络策略决定；确认正常后执行 rollback confirm。\n'
+  printf 'VPS Guard 防火墙已停用。所有端口将由其他防火墙和上游网络策略决定。\n'
 }
 
 enable_firewall() {
@@ -481,9 +487,9 @@ enable_firewall_unlocked() {
   local confirmed="$4"
   local operation="${5:-enable}"
   local advanced_rules="${6:-}"
-  local tcp_ports udp_ports ssh_ports candidate snapshot_output snapshot_id rollback_output rollback_token note
+  local tcp_ports udp_ports ssh_ports candidate snapshot_output snapshot_id rollback_output="" rollback_token="" note
 
-  validate_rollback_minutes "$rollback_minutes" || return $?
+  firewall_validate_optional_rollback "$rollback_minutes" || return $?
   if ! tcp_ports="$(normalize_basic_ports "$tcp_input")"; then
     error "TCP 端口支持 1-65535 的单端口、列表、范围或混合格式"
     return "$EXIT_USAGE"
@@ -526,7 +532,7 @@ enable_firewall_unlocked() {
   fi
 
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '警告：本操作会重载入站规则。确认按上述摘要写入并启动 %s 分钟回滚？[y/N] ' "$rollback_minutes"
+    printf '警告：本操作会重载入站规则。确认按上述摘要写入？[y/N] '
     IFS= read -r answer
     case "$answer" in
       y | Y | yes | YES) ;;
@@ -556,15 +562,17 @@ enable_firewall_unlocked() {
   fi
   rm -f "$candidate" || true
 
-  if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
-    recover_failed_firewall_change "$snapshot_id" || true
-    audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=rollback-schedule"
-    error "无法安排自动回滚，已尝试恢复原防火墙"
-    return "$EXIT_FAILURE"
+  if [[ "$rollback_minutes" != 0 ]]; then
+    if ! rollback_output="$(start_rollback "$snapshot_id" "$rollback_minutes" firewall)"; then
+      recover_failed_firewall_change "$snapshot_id" || true
+      audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=rollback-schedule"
+      error "无法安排自动回滚，已尝试恢复原防火墙"
+      return "$EXIT_FAILURE"
+    fi
+    printf '%s\n' "$rollback_output"
+    rollback_token="${rollback_output#*自动回滚已启动：}"
+    rollback_token="${rollback_token%%$'\n'*}"
   fi
-  printf '%s\n' "$rollback_output"
-  rollback_token="${rollback_output#*自动回滚已启动：}"
-  rollback_token="${rollback_token%%$'\n'*}"
   if ! reload_firewall_runtime; then
     recover_failed_firewall_change "$snapshot_id" "$rollback_token" || true
     audit_event "firewall.$operation" failure "snapshot=$snapshot_id reason=runtime-apply"
@@ -577,7 +585,11 @@ enable_firewall_unlocked() {
     open) printf '端口放行规则已更新。' ;;
     close) printf '端口放行规则已关闭。' ;;
   esac
-  printf '请从新 SSH 会话验证端口 %s 和业务服务，确认正常后执行 rollback confirm。\n' "$ssh_ports"
+  if [[ "$rollback_minutes" != 0 ]]; then
+    printf '请从新 SSH 会话验证端口 %s 和业务服务，确认正常后执行 rollback confirm。\n' "$ssh_ports"
+  else
+    printf '请从新 SSH 会话验证端口 %s 和业务服务。\n' "$ssh_ports"
+  fi
 }
 
 change_firewall_ports() {
@@ -694,7 +706,7 @@ show_firewall_status() {
 
 firewall_cli() {
   local action="${1:-}"
-  local tcp_ports="" udp_ports="" ports="" protocol="" rollback_minutes=5 confirmed=0
+  local tcp_ports="" udp_ports="" ports="" protocol="" rollback_minutes=0 confirmed=0
   local direction=inbound family=dual source=all interface="" external=unverified advanced=0
   case "$action" in
     enable)

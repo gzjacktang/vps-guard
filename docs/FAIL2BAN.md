@@ -87,7 +87,7 @@ sudo vps-guard fail2ban disable
 它不会卸载包或删除第三方 jail。从已知快照选择性恢复时，也只处理自有文件，并给恢复操作本身再加一层回滚：
 
 ```bash
-sudo vps-guard fail2ban restore <快照ID> --rollback-minutes 5
+sudo vps-guard fail2ban restore <快照ID>
 ```
 
 ## 限制与真实系统发布门禁

@@ -87,11 +87,10 @@ sudo vps-guard uninstall
 sudo vps-guard uninstall --purge-data
 ```
 
-此模式在普通卸载确认之外，还要求准确输入 `DELETE-VPS-GUARD-DATA`。`--yes` 不能绕过第二次确认；非交互自动化必须同时给出：
+此模式仍保留 `/etc` 与 live 防护，只会多删除快照、事务和审计日志。无论是否使用此选项，交互模式都只要求一次确认；非交互自动化可使用：
 
 ```bash
-sudo vps-guard uninstall --yes --purge-data \
-  --confirm-purge DELETE-VPS-GUARD-DATA
+sudo vps-guard uninstall --yes --purge-data
 ```
 
 存在 `pending`、`running`、`schedule-failed` 或 `failed` 自动回滚时，卸载返回退出码 3。不要手工删除程序绕过检查，否则断连后的 systemd 恢复可能找不到执行文件。

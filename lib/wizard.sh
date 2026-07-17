@@ -135,7 +135,7 @@ wizard_show_details() {
   printf '2. 仅防火墙：保留 SSH 入口并应用 nftables 入站基线\n'
   printf '3. 仅 Fail2ban：为当前 SSH 端口应用标准封禁策略\n'
   printf '密钥、禁用密码、root 策略、来源限制和出站限制位于对应高级子菜单。\n'
-  printf '所有方案应用时只创建一个完整快照和一个自动回滚任务。\n'
+  printf '只有标准防护实际迁移 SSH 端口时才创建自动回滚任务；其余方案应用后立即生效。\n'
 }
 
 wizard_recover() {
@@ -144,11 +144,21 @@ wizard_recover() {
   if restore_snapshot "$snapshot" 1 && run_rollback_hook "$hook"; then
     restored=1
   fi
-  if [[ "$restored" -eq 1 ]] && confirm_rollback "$rollback" 1 >/dev/null 2>&1; then
-    printf '已恢复向导开始前的完整配置并取消自动回滚。\n' >&2
-    return 0
+  if [[ "$restored" -eq 1 ]]; then
+    if [[ -z "$rollback" ]]; then
+      printf '已恢复向导开始前的完整配置。\n' >&2
+      return 0
+    fi
+    if confirm_rollback "$rollback" 1 >/dev/null 2>&1; then
+      printf '已恢复向导开始前的完整配置并取消自动回滚。\n' >&2
+      return 0
+    fi
   fi
-  error "向导立即恢复未完整成功；自动回滚仍保留，请勿确认该任务"
+  if [[ -n "$rollback" ]]; then
+    error "向导立即恢复未完整成功；自动回滚仍保留，请勿确认该任务"
+  else
+    error "向导立即恢复未完整成功；请从控制台恢复快照：$snapshot"
+  fi
   return "$EXIT_FAILURE"
 }
 
@@ -178,14 +188,13 @@ wizard_apply_unlocked() {
   local old_ports new_port transition_ports tcp_ports udp_ports advanced_rules hook snapshot_label
   local firewall_candidate="" fail2ban_candidate="" fail2ban_stage="" values ignoreip current_ip="" session_port
   local findtime maxretry bantime increment maxtime existing_tcp existing_udp
-  local snapshot_output snapshot rollback_output rollback token state_file answer result=0 listen_status failure_stage=""
+  local snapshot_output snapshot rollback_output rollback="" token="" state_file="" answer result=0 listen_status failure_stage="" uses_ssh_rollback=0
   trap 'rm -f "$firewall_candidate" "$fail2ban_candidate" "$fail2ban_stage"; trap - RETURN' RETURN
   case "$plan" in standard | firewall | fail2ban) ;; *)
     error "方案只允许 standard、firewall 或 fail2ban"
     return "$EXIT_USAGE"
     ;;
   esac
-  validate_rollback_minutes "$rollback_minutes" || return $?
   old_ports="$(effective_sshd_ports)" || return $?
   new_port="$old_ports"
   if [[ "$plan" == standard && "$requested_port" != keep ]]; then
@@ -207,6 +216,8 @@ wizard_apply_unlocked() {
   transition_ports="$old_ports"
   [[ "$new_port" == "$old_ports" ]] || transition_ports="$(merge_basic_ports "$old_ports" "$new_port")"
   if [[ "$new_port" != "$old_ports" ]]; then
+    uses_ssh_rollback=1
+    validate_rollback_minutes "$rollback_minutes" || return $?
     session_port="$(verified_ssh_session_port)" || return $?
     [[ ",$old_ports," == *",$session_port,"* ]] || {
       error "当前 SSH 会话端口 $session_port 不在 sshd 生效端口 $old_ports 中"
@@ -285,14 +296,22 @@ wizard_apply_unlocked() {
   if [[ "$plan" == fail2ban ]]; then printf '防火墙：保持不变\n'; else printf '防火墙：入站默认拒绝；TCP %s；UDP %s\n' "${tcp_ports:-无}" "${udp_ports:-无}"; fi
   if [[ "$plan" == firewall ]]; then printf 'Fail2ban：保持不变\n'; else printf 'Fail2ban：standard；SSH 端口 %s；白名单 %s\n' "$transition_ports" "$ignoreip"; fi
   printf '最坏后果：SSH 或业务连接中断；请先确认云控制台、串行控制台或救援模式可用。\n'
-  printf '事务保护：应用失败、未确认或超时会从同一个完整快照恢复。\n'
+  if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+    printf '事务保护：SSH 迁移在未确认或超时时会从同一个完整快照恢复。\n'
+  else
+    printf '事务保护：应用失败会立即从同一个完整快照恢复；本次不创建自动回滚。\n'
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     rm -f "$firewall_candidate" "$fail2ban_candidate"
     printf 'dry-run：不会写配置、重载服务或启动自动回滚。\n'
     return 0
   fi
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '确认一次性应用并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+    if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+      printf '确认一次性应用并启动 %s 分钟 SSH 自动回滚？[y/N] ' "$rollback_minutes"
+    else
+      printf '确认一次性应用上述配置？[y/N] '
+    fi
     IFS= read -r answer || answer=""
     case "$answer" in y | Y | yes | YES) ;; *)
       rm -f "$firewall_candidate" "$fail2ban_candidate"
@@ -308,16 +327,18 @@ wizard_apply_unlocked() {
   snapshot="${snapshot_output#*快照已创建：}"
   snapshot="${snapshot%%$'\n'*}"
   hook="wizard-$plan"
-  rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" "$hook")" || return $?
-  printf '%s\n' "$rollback_output"
-  rollback="${rollback_output#*自动回滚已启动：}"
-  rollback="${rollback%%$'\n'*}"
-  token="wizard-$(date -u '+%Y%m%dT%H%M%SZ')-$$-$RANDOM"
-  wizard_write_state "$token" "$snapshot" "$rollback" "$plan" "$old_ports" "$new_port" || {
-    wizard_recover "$snapshot" "$rollback" "$hook" || true
-    return "$EXIT_FAILURE"
-  }
-  state_file="$(wizard_state_directory "$token")/state"
+  if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+    rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" "$hook")" || return $?
+    printf '%s\n' "$rollback_output"
+    rollback="${rollback_output#*自动回滚已启动：}"
+    rollback="${rollback%%$'\n'*}"
+    token="wizard-$(date -u '+%Y%m%dT%H%M%SZ')-$$-$RANDOM"
+    wizard_write_state "$token" "$snapshot" "$rollback" "$plan" "$old_ports" "$new_port" || {
+      wizard_recover "$snapshot" "$rollback" "$hook" || true
+      return "$EXIT_FAILURE"
+    }
+    state_file="$(wizard_state_directory "$token")/state"
+  fi
 
   if [[ "$new_port" != "$old_ports" ]]; then
     failure_stage=ssh-write
@@ -350,23 +371,29 @@ wizard_apply_unlocked() {
     verify_sshd_transition_listeners "$transition_ports" || result=$?
   fi
   if [[ "$result" -ne 0 ]]; then
-    wizard_mark_recovering_and_restore "$state_file" "$snapshot" "$rollback" "$hook" "$failure_stage" || true
+    if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+      wizard_mark_recovering_and_restore "$state_file" "$snapshot" "$rollback" "$hook" "$failure_stage" || true
+    else
+      wizard_recover "$snapshot" "" "$hook" || true
+    fi
     audit_event wizard.apply failure "token=$token plan=$plan snapshot=$snapshot"
     error "快速安全配置部分应用失败（阶段：${failure_stage}），已尝试恢复起始状态"
     return "$EXIT_FAILURE"
   fi
-  if ! printf 'status=pending\n' >>"$state_file"; then
-    wizard_mark_recovering_and_restore "$state_file" "$snapshot" "$rollback" "$hook" state-write || true
-    audit_event wizard.apply failure "token=$token plan=$plan snapshot=$snapshot reason=state-write"
-    error "快速安全配置状态写入失败，已尝试恢复起始状态"
-    return "$EXIT_FAILURE"
+  if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+    if ! printf 'status=pending\n' >>"$state_file"; then
+      wizard_mark_recovering_and_restore "$state_file" "$snapshot" "$rollback" "$hook" state-write || true
+      audit_event wizard.apply failure "token=$token plan=$plan snapshot=$snapshot reason=state-write"
+      error "快速安全配置状态写入失败，已尝试恢复起始状态"
+      return "$EXIT_FAILURE"
+    fi
   fi
   audit_event wizard.apply success "token=$token plan=$plan snapshot=$snapshot rollback=$rollback"
-  printf '快速安全配置等待确认：%s\n' "$token"
-  if [[ "$new_port" != "$old_ports" ]]; then
-    printf '请保留当前会话，从新终端登录 SSH 端口 %s 后执行：vps-guard wizard confirm %s\n' "$new_port" "$token"
+  if [[ "$uses_ssh_rollback" -eq 1 ]]; then
+    printf '快速安全配置等待确认：%s\n' "$token"
+    printf '新 SSH 会话不会自动取消回滚；从新端口登录后必须执行：vps-guard wizard confirm %s\n' "$token"
   else
-    printf '请验证 SSH、业务端口和防护状态后执行：vps-guard wizard confirm %s\n' "$token"
+    printf '快速安全配置已应用；未迁移 SSH 端口，因此未创建自动回滚。\n'
   fi
 }
 

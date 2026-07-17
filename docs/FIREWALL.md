@@ -64,22 +64,22 @@ sudo vps-guard firewall status --ports 443 --protocol tcp --external-confirm rea
 ### 启用基线
 
 ```bash
-sudo vps-guard --dry-run firewall enable --tcp 80,443 --udp 53 --rollback-minutes 5 --yes
-sudo vps-guard firewall enable --tcp 80,443 --udp 53 --rollback-minutes 5
+sudo vps-guard --dry-run firewall enable --tcp 80,443 --udp 53 --yes
+sudo vps-guard firewall enable --tcp 80,443 --udp 53
 ```
 
 `--tcp` 与 `--udp` 可省略。端口语法接受单端口、逗号列表、范围和混合格式，例如 `80,443,8000-8100`。区间会排序、去重并合并相邻或重叠部分；越界、倒置、空项和歧义输入在任何快照或写入前拒绝。
 
-不传 `--yes` 时会在展示完整摘要和通过语法检查后交互确认。脚本或自动化可以显式使用 `--yes`，但仍会运行预检、快照和自动回滚。
+不传 `--yes` 时会在展示完整摘要和通过语法检查后交互确认。脚本或自动化可以显式使用 `--yes`，但仍会运行预检、快照和语法检查；防火墙变更成功后立即生效，不会自动创建回滚计时器。
 
-启用或更新的最坏后果是规则错误导致 SSH 连接中断、VPS 暂时失联。操作前应确认云控制台、串行控制台或救援模式至少有一种可用；自动回滚是主要保护，但不替代带外恢复入口。
+启用或更新的最坏后果是规则错误导致 SSH 连接中断、VPS 暂时失联。操作前应确认云控制台、串行控制台或救援模式至少有一种可用；防火墙操作不自动回滚，因此带外恢复入口尤为重要。
 
 ### 开放或关闭基础端口
 
 ```bash
-sudo vps-guard firewall open --ports 80,443 --protocol tcp --rollback-minutes 5
-sudo vps-guard firewall open --ports 53 --protocol udp --rollback-minutes 5
-sudo vps-guard firewall close --ports 80 --protocol tcp --rollback-minutes 5
+sudo vps-guard firewall open --ports 80,443 --protocol tcp
+sudo vps-guard firewall open --ports 53 --protocol udp
+sudo vps-guard firewall close --ports 80 --protocol tcp
 ```
 
 协议允许 `tcp`、`udp` 或 `both`。重复开放已开放端口、关闭已关闭端口均返回成功的幂等提示，不创建新快照。受保护 SSH 集合独立于额外 TCP 集合，因此基础关闭命令不能移除当前 SSH 入口。
@@ -104,7 +104,7 @@ sudo vps-guard firewall close --ports 53,80,443 --protocol both \
 ### 停用
 
 ```bash
-sudo vps-guard firewall disable --rollback-minutes 5
+sudo vps-guard firewall disable
 ```
 
 停用前会明确警告：VPS Guard 不再过滤任何端口，实际开放情况转由其他本机防火墙与上游网络策略决定。重复停用返回幂等成功。

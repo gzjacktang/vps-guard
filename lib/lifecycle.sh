@@ -176,8 +176,8 @@ check_for_update() {
 }
 
 uninstall_vps_guard() (
-  local assume_yes="$1" purge_data="$2" purge_proof="$3"
-  local program_root command_link data_dir audit_log audit_dir config_dir answer proof
+  local assume_yes="$1" purge_data="$2"
+  local program_root command_link data_dir audit_log audit_dir config_dir answer
   local quarantine launcher_backup lock_acquired=0 program_present=0
   program_root="$(lifecycle_program_root)"
   command_link="$(lifecycle_command_link)"
@@ -226,18 +226,6 @@ uninstall_vps_guard() (
       ;;
     esac
   fi
-  if [[ "$purge_data" -eq 1 ]]; then
-    proof="$purge_proof"
-    if [[ "$proof" != DELETE-VPS-GUARD-DATA ]]; then
-      printf '二次确认：输入 DELETE-VPS-GUARD-DATA 才会清理数据：'
-      IFS= read -r proof || proof=""
-    fi
-    [[ "$proof" == DELETE-VPS-GUARD-DATA ]] || {
-      error "数据清理二次确认不匹配；未删除任何内容"
-      return "$EXIT_CONFLICT"
-    }
-  fi
-
   lifecycle_acquire_lock || return $?
   lock_acquired=1
   trap '[[ "$lock_acquired" -ne 1 ]] || lifecycle_release_lock' EXIT INT TERM
@@ -308,7 +296,7 @@ uninstall_vps_guard() (
 )
 
 lifecycle_cli() {
-  local action="${1:-}" assume_yes=0 purge_data=0 purge_proof=""
+  local action="${1:-}" assume_yes=0 purge_data=0
   shift || true
   case "$action" in
     update-check)
@@ -323,19 +311,14 @@ lifecycle_cli() {
         case "$1" in
           --yes) assume_yes=1 ;;
           --purge-data) purge_data=1 ;;
-          --confirm-purge)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            purge_proof="$2"
-            shift
-            ;;
           *)
-            error "用法：vps-guard uninstall [--yes] [--purge-data [--confirm-purge DELETE-VPS-GUARD-DATA]]"
+            error "用法：vps-guard uninstall [--yes] [--purge-data]"
             return "$EXIT_USAGE"
             ;;
         esac
         shift
       done
-      uninstall_vps_guard "$assume_yes" "$purge_data" "$purge_proof"
+      uninstall_vps_guard "$assume_yes" "$purge_data"
       ;;
     *)
       error "用法：vps-guard lifecycle <update-check|uninstall>"

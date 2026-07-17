@@ -323,8 +323,12 @@ restore_fail2ban_snapshot() {
 }
 
 recover_failed_fail2ban_change() {
-  local snapshot="$1" rollback_token="$2"
+  local snapshot="$1" rollback_token="${2:-}"
   if restore_fail2ban_snapshot "$snapshot" >/dev/null 2>&1; then
+    if [[ -z "$rollback_token" ]]; then
+      printf '已恢复操作前配置。\n' >&2
+      return 0
+    fi
     if confirm_rollback "$rollback_token" 1 >/dev/null 2>&1; then
       printf '已恢复操作前配置并取消定时回滚。\n' >&2
       return 0
@@ -332,8 +336,16 @@ recover_failed_fail2ban_change() {
     error "操作前配置已恢复，但无法取消定时回滚；任务仍保留，请检查其状态"
     return "$EXIT_FAILURE"
   fi
-  error "立即恢复未完整成功；独立自动回滚任务仍保留，请勿手工确认"
+  if [[ -n "$rollback_token" ]]; then
+    error "立即恢复未完整成功；独立自动回滚任务仍保留，请勿手工确认"
+  else
+    error "立即恢复未完整成功；请从控制台恢复快照：$snapshot"
+  fi
   return "$EXIT_FAILURE"
+}
+
+fail2ban_validate_optional_rollback() {
+  [[ "$1" == 0 ]] || validate_rollback_minutes "$1"
 }
 
 apply_fail2ban_policy() {
@@ -343,7 +355,7 @@ apply_fail2ban_policy() {
 apply_fail2ban_policy_unlocked() {
   local preset="$1" findtime="$2" maxretry="$3" bantime="$4" increment="$5" maxtime="$6"
   local ignore_input="$7" trust_current="$8" confirmed="$9" rollback_minutes="${10}"
-  local values current_ip="" ignoreip ports candidate live_stage="" answer snapshot_output snapshot rollback_output rollback_token failure_status
+  local values current_ip="" ignoreip ports candidate live_stage="" answer snapshot_output snapshot rollback_output="" rollback_token="" failure_status
   if ! fail2ban_is_installed; then
     show_fail2ban_install_plan
     error "请先单独执行 vps-guard fail2ban install，安装成功后再应用配置"
@@ -393,7 +405,7 @@ apply_fail2ban_policy_unlocked() {
     return 0
   }
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '确认应用并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+    printf '确认应用 Fail2ban 防护？[y/N] '
     IFS= read -r answer
     case "$answer" in y | Y | yes | YES) ;; *)
       rm -f "$candidate"
@@ -402,7 +414,7 @@ apply_fail2ban_policy_unlocked() {
       ;;
     esac
   fi
-  validate_rollback_minutes "$rollback_minutes" || {
+  fail2ban_validate_optional_rollback "$rollback_minutes" || {
     failure_status=$?
     rm -f "$candidate"
     return "$failure_status"
@@ -420,14 +432,16 @@ apply_fail2ban_policy_unlocked() {
   printf '%s\n' "$snapshot_output"
   snapshot="${snapshot_output#*快照已创建：}"
   snapshot="${snapshot%%$'\n'*}"
-  rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" fail2ban)" || {
-    failure_status=$?
-    rm -f "$candidate"
-    return "$failure_status"
-  }
-  printf '%s\n' "$rollback_output"
-  rollback_token="${rollback_output#*自动回滚已启动：}"
-  rollback_token="${rollback_token%%$'\n'*}"
+  if [[ "$rollback_minutes" != 0 ]]; then
+    rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" fail2ban)" || {
+      failure_status=$?
+      rm -f "$candidate"
+      return "$failure_status"
+    }
+    printf '%s\n' "$rollback_output"
+    rollback_token="${rollback_output#*自动回滚已启动：}"
+    rollback_token="${rollback_token%%$'\n'*}"
+  fi
   if ! live_stage="$(stage_fail2ban_candidate "$candidate")" || ! mv "$live_stage" "$(fail2ban_config_path)" || ! reload_fail2ban_runtime; then
     rm -f "$live_stage"
     rm -f "$candidate"
@@ -438,7 +452,11 @@ apply_fail2ban_policy_unlocked() {
   fi
   rm -f "$candidate"
   audit_event fail2ban.apply success "preset=$preset snapshot=$snapshot"
-  printf 'Fail2ban sshd 防护已启用；请验证新 SSH 会话后执行 rollback confirm。\n'
+  if [[ "$rollback_minutes" != 0 ]]; then
+    printf 'Fail2ban sshd 防护已启用；请验证新 SSH 会话后执行 rollback confirm。\n'
+  else
+    printf 'Fail2ban sshd 防护已启用。\n'
+  fi
 }
 
 show_fail2ban_status() {
@@ -490,7 +508,7 @@ disable_fail2ban() {
 }
 
 disable_fail2ban_unlocked() {
-  local rollback_minutes="$1" confirmed="$2" answer snapshot_output snapshot rollback_output rollback_token
+  local rollback_minutes="$1" confirmed="$2" answer snapshot_output snapshot rollback_output="" rollback_token=""
   [[ -e "$(fail2ban_config_path)" ]] || {
     printf 'VPS Guard Fail2ban 配置已经停用。\n'
     return 0
@@ -502,7 +520,7 @@ disable_fail2ban_unlocked() {
     return 0
   }
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '确认停用并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+    printf '确认停用 VPS Guard 管理的 Fail2ban 配置？[y/N] '
     IFS= read -r answer
     case "$answer" in y | Y | yes | YES) ;; *)
       printf '已取消。\n'
@@ -510,16 +528,18 @@ disable_fail2ban_unlocked() {
       ;;
     esac
   fi
-  validate_rollback_minutes "$rollback_minutes" || return $?
+  fail2ban_validate_optional_rollback "$rollback_minutes" || return $?
   ensure_no_pending_firewall_rollback || return $?
   snapshot_output="$(create_snapshot fail2ban-before-disable)" || return $?
   printf '%s\n' "$snapshot_output"
   snapshot="${snapshot_output#*快照已创建：}"
   snapshot="${snapshot%%$'\n'*}"
-  rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" fail2ban)" || return $?
-  printf '%s\n' "$rollback_output"
-  rollback_token="${rollback_output#*自动回滚已启动：}"
-  rollback_token="${rollback_token%%$'\n'*}"
+  if [[ "$rollback_minutes" != 0 ]]; then
+    rollback_output="$(start_rollback "$snapshot" "$rollback_minutes" fail2ban)" || return $?
+    printf '%s\n' "$rollback_output"
+    rollback_token="${rollback_output#*自动回滚已启动：}"
+    rollback_token="${rollback_token%%$'\n'*}"
+  fi
   if ! rm -f "$(fail2ban_config_path)" || ! fail2ban-client -t || ! systemctl restart fail2ban; then
     recover_failed_fail2ban_change "$snapshot" "$rollback_token" || true
     error "停用失败，已尝试恢复"
@@ -534,7 +554,7 @@ restore_fail2ban_from_snapshot() {
 }
 
 restore_fail2ban_from_snapshot_unlocked() {
-  local target="$1" minutes="$2" confirmed="$3" target_dir saved candidate="" live_stage="" answer current_output current rollback_output rollback_token
+  local target="$1" minutes="$2" confirmed="$3" target_dir saved candidate="" live_stage="" answer current_output current rollback_output="" rollback_token=""
   local manifest_entry kind mode expected_checksum extra failure_status
   fail2ban_is_installed || {
     error "Fail2ban 未安装，不能校验或恢复配置"
@@ -587,7 +607,7 @@ restore_fail2ban_from_snapshot_unlocked() {
     return 0
   }
   if [[ "$confirmed" -ne 1 ]]; then
-    printf '确认恢复并启动 %s 分钟自动回滚？[y/N] ' "$minutes"
+    printf '确认恢复 Fail2ban 配置？[y/N] '
     IFS= read -r answer
     case "$answer" in y | Y | yes | YES) ;; *)
       rm -f "$candidate"
@@ -596,7 +616,7 @@ restore_fail2ban_from_snapshot_unlocked() {
       ;;
     esac
   fi
-  validate_rollback_minutes "$minutes" || {
+  fail2ban_validate_optional_rollback "$minutes" || {
     failure_status=$?
     rm -f "$candidate"
     return "$failure_status"
@@ -614,14 +634,16 @@ restore_fail2ban_from_snapshot_unlocked() {
   printf '%s\n' "$current_output"
   current="${current_output#*快照已创建：}"
   current="${current%%$'\n'*}"
-  rollback_output="$(start_rollback "$current" "$minutes" fail2ban)" || {
-    failure_status=$?
-    rm -f "$candidate"
-    return "$failure_status"
-  }
-  printf '%s\n' "$rollback_output"
-  rollback_token="${rollback_output#*自动回滚已启动：}"
-  rollback_token="${rollback_token%%$'\n'*}"
+  if [[ "$minutes" != 0 ]]; then
+    rollback_output="$(start_rollback "$current" "$minutes" fail2ban)" || {
+      failure_status=$?
+      rm -f "$candidate"
+      return "$failure_status"
+    }
+    printf '%s\n' "$rollback_output"
+    rollback_token="${rollback_output#*自动回滚已启动：}"
+    rollback_token="${rollback_token%%$'\n'*}"
+  fi
   if { [[ -n "$candidate" ]] && ! live_stage="$(stage_fail2ban_candidate "$candidate")"; } ||
     { [[ -n "$candidate" ]] && ! mv "$live_stage" "$(fail2ban_config_path)"; } ||
     { [[ -z "$candidate" ]] && ! rm -f "$(fail2ban_config_path)"; } ||
@@ -634,11 +656,15 @@ restore_fail2ban_from_snapshot_unlocked() {
   fi
   rm -f "$candidate"
   audit_event fail2ban.restore success "snapshot=$target rollback=$rollback_token"
-  printf 'Fail2ban 自有配置已恢复；验证后执行 rollback confirm。\n'
+  if [[ "$minutes" != 0 ]]; then
+    printf 'Fail2ban 自有配置已恢复；验证后执行 rollback confirm。\n'
+  else
+    printf 'Fail2ban 自有配置已恢复。\n'
+  fi
 }
 
 fail2ban_cli() {
-  local action="${1:-}" preset=standard findtime="" maxretry="" bantime="" increment=false maxtime=604800 ignoreip="" trust=ask confirmed=0 minutes=5 ip snapshot
+  local action="${1:-}" preset=standard findtime="" maxretry="" bantime="" increment=false maxtime=604800 ignoreip="" trust=ask confirmed=0 minutes=0 ip snapshot
   case "$action" in
     install)
       [[ "$#" -le 2 ]] || return "$EXIT_USAGE"

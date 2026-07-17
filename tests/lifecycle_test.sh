@@ -47,17 +47,11 @@ test_default_uninstall_preserves_configuration_data_and_log() {
   [[ -r "$TEST_ROOT/config/keep.conf" ]]
 }
 
-test_purge_requires_independent_typed_confirmation() {
+test_purge_uses_the_same_single_confirmation() {
   setup_lifecycle_test
   trap teardown_lifecycle_test RETURN
 
-  run_vps_guard uninstall --yes --purge-data --confirm-purge WRONG
-
-  assert_status 3
-  assert_output_contains "二次确认不匹配"
-  [[ -e "$TEST_ROOT/program" && -e "$TEST_ROOT/data" && -e "$TEST_ROOT/log/audit.log" ]]
-
-  run_vps_guard uninstall --yes --purge-data --confirm-purge DELETE-VPS-GUARD-DATA
+  run_vps_guard uninstall --yes --purge-data
   assert_status 0
   [[ ! -e "$TEST_ROOT/program" && ! -e "$TEST_ROOT/data" && ! -e "$TEST_ROOT/log/audit.log" ]]
   [[ -r "$TEST_ROOT/config/keep.conf" ]]
@@ -171,7 +165,7 @@ test_update_check_only_reads_release_metadata() {
 }
 
 test_default_uninstall_preserves_configuration_data_and_log
-test_purge_requires_independent_typed_confirmation
+test_purge_uses_the_same_single_confirmation
 test_active_rollback_blocks_uninstall
 test_untrusted_launcher_blocks_uninstall_without_deleting_files
 test_missing_rollback_state_blocks_uninstall_fail_closed

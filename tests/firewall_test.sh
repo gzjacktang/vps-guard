@@ -82,22 +82,16 @@ test_firewall_preserves_current_verified_ssh_session_port_and_configured_port() 
   TEST_SSH_CONNECTION=""
 }
 
-test_firewall_enable_writes_only_managed_scope_and_starts_rollback() {
-  local token
+test_firewall_enable_writes_only_managed_scope_without_default_rollback() {
   setup_firewall_test
   trap teardown_test_root RETURN
   printf 'table inet third_party { chain input { type filter hook input priority 10; } }\n' >>"$TEST_ROOT/fs/etc/nftables.conf"
-  write_stub systemd-run "printf '%s\\n' \"\$*\" >>'$TEST_ROOT/systemd-run.log'"
-
   run_vps_guard firewall enable --tcp 80,443 --udp 53 --yes
 
   assert_status 0
   assert_output_contains "防火墙已启用"
-  assert_output_contains "自动回滚已启动："
-  assert_output_contains "请从新 SSH 会话验证"
-  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
-  token="${token%%$'\n'*}"
-  [[ -n "$token" ]]
+  assert_output_not_contains "自动回滚已启动："
+  [[ ! -e "$TEST_ROOT/systemd-run.log" ]]
   grep -q 'table inet third_party' "$TEST_ROOT/fs/etc/nftables.conf"
   [[ "$(grep -Fc 'include "/etc/nftables.d/vps-guard.nft" # vps-guard' "$TEST_ROOT/fs/etc/nftables.conf")" -eq 1 ]]
   grep -q 'table inet vps_guard' "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft"
@@ -126,8 +120,7 @@ test_firewall_enable_writes_only_managed_scope_and_starts_rollback() {
     printf '不得删除第三方 nftables 表\n' >&2
     return 1
   fi
-  [[ -r "$TEST_ROOT/data/rollbacks/$token/state" ]]
-  grep -q '^hook=firewall$' "$TEST_ROOT/data/rollbacks/$token/state"
+  [[ ! -d "$TEST_ROOT/data/rollbacks" ]]
 }
 
 test_firewall_syntax_failure_leaves_system_unchanged() {
@@ -149,7 +142,7 @@ fi
 exit 0
 "
 
-  run_vps_guard firewall enable --tcp 80 --yes
+  run_vps_guard firewall enable --tcp 80 --rollback-minutes 5 --yes
 
   assert_status 1
   assert_output_contains "nftables 语法检查失败，未写入任何配置"
@@ -190,7 +183,7 @@ fi
 exit 0
 "
 
-  run_vps_guard firewall enable --tcp 80 --yes
+  run_vps_guard firewall enable --tcp 80 --rollback-minutes 5 --yes
   assert_status 0
   token="${COMMAND_OUTPUT#*自动回滚已启动：}"
   token="${token%%$'\n'*}"
@@ -235,16 +228,14 @@ fi
 exit 0
 "
 
-  run_vps_guard firewall enable --tcp 80 --yes
+  run_vps_guard firewall enable --tcp 80 --rollback-minutes 5 --yes
 
   assert_status 1
   assert_output_contains "防火墙应用失败，已尝试恢复快照"
   [[ "$(<"$TEST_ROOT/fs/etc/nftables.conf")" == "$before" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/vps-guard/firewall.conf" ]]
-  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
-  token="${token%%$'\n'*}"
-  grep -q '^status=confirmed$' "$TEST_ROOT/data/rollbacks/$token/state"
+  [[ ! -d "$TEST_ROOT/data/rollbacks" ]]
   run_vps_guard audit list
   assert_output_contains "action=firewall.enable"
   assert_output_contains "result=failure"
@@ -258,7 +249,7 @@ test_firewall_rollback_schedule_failure_restores_immediately() {
   before="$(<"$TEST_ROOT/fs/etc/nftables.conf")"
   write_stub systemd-run 'exit 1'
 
-  run_vps_guard firewall enable --tcp 80 --yes
+  run_vps_guard firewall enable --tcp 80 --rollback-minutes 5 --yes
 
   assert_status 1
   assert_output_contains "无法安排自动回滚，已尝试恢复原防火墙"
@@ -279,7 +270,7 @@ test_firewall_open_and_close_basic_ports_are_idempotent() {
   write_stub systemd-run "printf 'run\\n' >>'$TEST_ROOT/systemd-run.log'"
   write_stub systemctl 'exit 0'
 
-  run_vps_guard firewall open --ports 443,80,443 --protocol tcp --yes
+  run_vps_guard firewall open --ports 443,80,443 --protocol tcp --rollback-minutes 5 --yes
   assert_status 0
   assert_output_contains "端口放行规则已更新"
   grep -q '^tcp_ports=80,443$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
@@ -293,7 +284,7 @@ test_firewall_open_and_close_basic_ports_are_idempotent() {
   assert_status 0
   assert_output_contains "指定端口已经开放，无需重复操作"
 
-  run_vps_guard firewall close --ports 80 --protocol tcp --yes
+  run_vps_guard firewall close --ports 80 --protocol tcp --rollback-minutes 5 --yes
   assert_status 0
   assert_output_contains "端口放行规则已关闭"
   grep -q '^tcp_ports=443$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
@@ -345,7 +336,7 @@ test_firewall_disable_removes_only_managed_scope_with_rollback() {
   printf 'table inet third_party { chain input { type filter hook input priority 10; } }\n' >>"$TEST_ROOT/fs/etc/nftables.conf"
   write_stub systemd-run 'exit 0'
 
-  run_vps_guard firewall disable --yes
+  run_vps_guard firewall disable --rollback-minutes 5 --yes
 
   assert_status 0
   assert_output_contains "VPS Guard 防火墙已停用"
@@ -497,7 +488,7 @@ test_firewall_blocks_overlapping_pending_transactions() {
   seed_enabled_firewall
   write_stub systemd-run "printf 'run\\n' >>'$TEST_ROOT/systemd-run.log'"
 
-  run_vps_guard firewall open --ports 443 --protocol tcp --yes
+  run_vps_guard firewall open --ports 443 --protocol tcp --rollback-minutes 5 --yes
   assert_status 0
 
   run_vps_guard firewall close --ports 80 --protocol tcp --yes
@@ -546,7 +537,7 @@ test_firewall_update_and_disable_dry_runs_do_not_change_state() {
 
 test_firewall_enable_dry_run_shows_checked_dual_stack_baseline_without_writes
 test_firewall_preserves_current_verified_ssh_session_port_and_configured_port
-test_firewall_enable_writes_only_managed_scope_and_starts_rollback
+test_firewall_enable_writes_only_managed_scope_without_default_rollback
 test_firewall_syntax_failure_leaves_system_unchanged
 test_firewall_timeout_rollback_restores_files_and_runtime_table
 test_firewall_apply_failure_restores_snapshot_immediately

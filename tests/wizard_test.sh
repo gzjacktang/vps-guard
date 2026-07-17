@@ -132,16 +132,15 @@ test_standard_plan_uses_one_snapshot_and_commits_from_new_port() {
 }
 
 test_firewall_only_and_fail2ban_only_touch_only_selected_component() {
-  local token
   setup_wizard_test
   run_vps_guard wizard apply --plan firewall --tcp 80 --udp 53 --yes
   assert_status 0
   assert_output_contains "Fail2ban：保持不变"
   [[ ! -e "$TEST_ROOT/fs/etc/fail2ban/jail.d/vps-guard.local" ]]
   [[ ! -e "$TEST_ROOT/fs/etc/ssh/sshd_config.d/00-vps-guard-port.conf" ]]
-  token="$(extract_wizard_token)"
-  run_vps_guard wizard confirm "$token"
-  assert_status 0
+  assert_output_contains "未迁移 SSH 端口，因此未创建自动回滚"
+  [[ ! -d "$TEST_ROOT/data/wizards" ]]
+  [[ ! -e "$TEST_ROOT/systemd-run.log" ]]
   teardown_test_root
 
   setup_wizard_test
@@ -270,13 +269,14 @@ test_confirm_state_tail_is_recoverable_and_corruption_is_rejected() {
   setup_wizard_test
   trap teardown_test_root RETURN
 
-  run_vps_guard wizard apply --plan firewall --tcp 80 --udp 53 --yes
+  run_vps_guard wizard apply --plan standard --ssh-port 2222 --tcp 80 --udp 53 --yes
   assert_status 0
   token="$(extract_wizard_token)"
   state="$TEST_ROOT/data/wizards/$token/state"
   rollback="$(sed -n 's/^rollback=//p' "$state")"
   touch "$TEST_ROOT/break-wizard-state-on-stop"
 
+  TEST_SSH_CONNECTION="198.51.100.10 50001 203.0.113.20 2222"
   run_vps_guard wizard confirm "$token"
   assert_status 1
   assert_output_contains "状态收尾失败"
