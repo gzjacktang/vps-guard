@@ -2,6 +2,21 @@
 
 所有系统状态或配置命令均要求 root。全局 `--dry-run` 必须放在子命令之前；dry-run 只显示计划，不创建快照、状态文件或 systemd 任务。
 
+## 快速安全配置
+
+```text
+vps-guard wizard details
+vps-guard wizard apply --plan standard [--ssh-port keep|端口] [--tcp 端口表达式] [--udp 端口表达式] [--rollback-minutes 3|5|10] [--yes]
+vps-guard wizard apply --plan firewall [--tcp 端口表达式] [--udp 端口表达式] [--rollback-minutes 3|5|10] [--yes]
+vps-guard wizard apply --plan fail2ban [--rollback-minutes 3|5|10] [--yes]
+vps-guard wizard status <向导令牌>
+vps-guard wizard confirm <向导令牌>
+```
+
+菜单入口只列标准防护、仅防火墙、仅 Fail2ban 和查看详情。标准流程只收集 SSH 新端口（留空保持）及 TCP/UDP 业务端口；菜单会把非回环监听端口作为可编辑建议，并排除当前 SSH 端口。密钥、禁用密码、root 策略、来源限制及出站限制仍在对应高级子菜单。
+
+向导先完成所有候选校验，再显示 SSH、防火墙和 Fail2ban 的统一差异、最坏后果及带外恢复提醒。确认后只建立一份完整快照和一个 systemd 自动回滚任务。改变 SSH 端口时，只有目标新端口会话能执行 `wizard confirm`；普通 `rollback confirm` 会被拒绝。详见 [快速安全配置](QUICK-START.md)。
+
 ## 网络环境预检
 
 ```text
@@ -89,6 +104,8 @@ vps-guard rollback run <令牌>
 ```
 
 默认窗口为 5 分钟。`run` 是 systemd 定时任务使用的内部公开入口；重复运行或重复确认均是幂等操作。
+
+SSH 迁移、SSH 加固和快速向导拥有受管确认语义，其底层回滚令牌不能直接确认，必须使用对应的 `ssh confirm`、`ssh harden confirm` 或 `wizard confirm`。
 
 ## 审计
 

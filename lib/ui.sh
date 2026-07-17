@@ -63,7 +63,11 @@ show_main_menu() {
         show_fail2ban_menu
         ;;
       1 | 7)
-        printf '该功能将在后续实施切片中提供。\n'
+        if [[ "$choice" == 1 ]]; then
+          show_quick_security_menu
+        else
+          printf '该功能将在后续实施切片中提供。\n'
+        fi
         ;;
       *)
         printf '无效选项，请重新输入。\n'
@@ -398,7 +402,7 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|preflight|ssh|firewall|fail2ban|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|wizard|ssh|firewall|fail2ban|backup|rollback|audit|help]\n'
 }
 
 show_fail2ban_menu() {

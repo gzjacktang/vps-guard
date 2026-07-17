@@ -45,6 +45,23 @@ sudo vps-guard ssh restore <已知快照ID> --rollback-minutes 5
 
 重置到 22 仍需从新的 22 端口 SSH 会话确认；选择性恢复完成后需从新会话验证，再确认输出的普通回滚令牌。不要手工删除 `00-vps-guard-port.conf` 而不同时恢复原 `Port` 指令和防火墙状态。
 
+## 快速安全配置中断
+
+快速向导输出 `wizard-...` 向导令牌和 `rb-...` 自动回滚令牌。不要直接确认 `rb-...`；工具会拒绝这种绕过。先保留旧会话，从新终端验证 SSH、业务端口和 Fail2ban：
+
+```bash
+sudo vps-guard wizard status <wizard令牌>
+sudo vps-guard firewall status
+sudo vps-guard fail2ban status
+sudo vps-guard wizard confirm <wizard令牌>
+```
+
+如果向导改变了 SSH 端口，最后一条命令必须从目标新端口的 SSH 会话执行。任一关键组件应用失败时，工具会恢复同一份起始快照并重载三个运行时；只在恢复和取消计时任务都成功时才报告立即恢复完成。若新连接失败或状态不确定，不要确认，等待 3/5/10 分钟后重试旧入口。
+
+向导在恢复前会先持久化 `recovering`。即使恢复后写状态失败或进程中断，后续 `wizard confirm` 也只会再次执行幂等恢复并最终标记 `failed`，不会把已恢复的旧配置误报为 `committed`。
+
+超时后 `wizard status` 会结合关联回滚状态显示 `rolled-back`。恢复到向导前没有自有 Fail2ban jail 的状态时，工具仍会重启 Fail2ban，防止已删除的 jail 继续残留在内存中。
+
 SSH 认证加固使用 `hard-...` 事务令牌。新公钥会话无法登录时，不要执行 `ssh harden confirm`，保留旧会话并等待 3/5/10 分钟自动恢复。客户端公钥导入默认 5 分钟自动撤销认证 drop-in 和本工具新增密钥；服务器生成的备用私钥默认 10 分钟清理。可用 `ssh key status` 查看状态、对待确认项执行 `ssh key discard` 立即撤销。通用 SSH 快照不覆盖用户自行维护的 `authorized_keys`，避免恢复配置时意外删除其他管理员密钥。完整排错见 [SSH 密钥设置与可选加固](SSH-HARDENING.md)。
 
 ## 防火墙恢复
