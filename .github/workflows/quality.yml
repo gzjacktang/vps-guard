@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install shell tools
-        run: sudo apt-get update && sudo apt-get install --yes shellcheck shfmt
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck shfmt ripgrep
 
       - name: ShellCheck
         run: shellcheck vps-guard.sh install.sh lib/*.sh scripts/*.sh tests/*.sh

@@ -5,6 +5,8 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/test_helper.sh
 source "$PROJECT_ROOT/tests/test_helper.sh"
+# 可移植 sed -i：Linux 和 macOS 兼容
+portable_sed() { sed -i.bak "$@" && rm -f "${*: -1}.bak"; }
 
 # ---- 辅助：构建完整合法门禁，然后替换单个文件 ----
 setup_valid_gate() {
@@ -77,7 +79,7 @@ test_rejects_unsupported_debian_version() {
   local gate_root="$TEST_ROOT/vm"
   setup_valid_gate "$gate_root"
   # Debian 11 不在支持范围
-  sed -i '' 's/^version=12$/version=11/' "$gate_root/debian.env"
+  portable_sed 's/^version=12$/version=11/' "$gate_root/debian.env"
 
   run_vm_gate "$gate_root"
   assert_status 1
@@ -90,7 +92,7 @@ test_rejects_unsupported_ubuntu_version() {
   local gate_root="$TEST_ROOT/vm"
   setup_valid_gate "$gate_root"
   # Ubuntu 20.04 不在支持范围
-  sed -i '' 's/^version=24\.04$/version=20.04/' "$gate_root/ubuntu.env"
+  portable_sed 's/^version=24\.04$/version=20.04/' "$gate_root/ubuntu.env"
 
   run_vm_gate "$gate_root"
   assert_status 1
@@ -102,7 +104,7 @@ test_rejects_unsupported_arch() {
   trap teardown_test_root RETURN
   local gate_root="$TEST_ROOT/vm"
   setup_valid_gate "$gate_root"
-  sed -i '' 's/^arch=amd64$/arch=i386/' "$gate_root/debian.env"
+  portable_sed 's/^arch=amd64$/arch=i386/' "$gate_root/debian.env"
 
   run_vm_gate "$gate_root"
   assert_status 1
@@ -115,7 +117,7 @@ test_rejects_invalid_date_format() {
   local gate_root="$TEST_ROOT/vm"
   setup_valid_gate "$gate_root"
   # 缺少时区 Z 后缀
-  sed -i '' 's/^date_utc=.*$/date_utc=2026-07-15T10:00:00/' "$gate_root/debian.env"
+  portable_sed 's/^date_utc=.*$/date_utc=2026-07-15T10:00:00/' "$gate_root/debian.env"
 
   run_vm_gate "$gate_root"
   assert_status 1
@@ -127,7 +129,7 @@ test_rejects_placeholder_date() {
   trap teardown_test_root RETURN
   local gate_root="$TEST_ROOT/vm"
   setup_valid_gate "$gate_root"
-  sed -i '' 's/^date_utc=.*$/date_utc=PENDING/' "$gate_root/debian.env"
+  portable_sed 's/^date_utc=.*$/date_utc=PENDING/' "$gate_root/debian.env"
 
   run_vm_gate "$gate_root"
   assert_status 1

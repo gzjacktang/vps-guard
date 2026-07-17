@@ -54,7 +54,9 @@ test_install_creates_working_launcher_and_versioned_release() {
   [[ -x "$prefix/sbin/vps-guard" && ! -L "$prefix/sbin/vps-guard" ]]
   [[ "$(readlink "$prefix/lib/vps-guard/current")" == releases/1.0.0 ]]
   [[ -x "$prefix/lib/vps-guard/releases/1.0.0/vps-guard.sh" ]]
-  [[ "$(stat -f '%Lp' "$prefix/lib/vps-guard/releases/1.0.0/lib/core.sh" 2>/dev/null || stat -c '%a' "$prefix/lib/vps-guard/releases/1.0.0/lib/core.sh")" == 644 ]]
+  # 可移植权限检查：Linux stat -c 优先，macOS stat -f 作为后备
+  perms="$(stat -c '%a' "$prefix/lib/vps-guard/releases/1.0.0/lib/core.sh" 2>/dev/null || stat -f '%Lp' "$prefix/lib/vps-guard/releases/1.0.0/lib/core.sh" 2>/dev/null)"
+  [[ "$perms" == 644 ]]
   COMMAND_OUTPUT="$("$prefix/sbin/vps-guard" version 2>&1)"
   COMMAND_STATUS=$?
   assert_status 0
