@@ -163,10 +163,10 @@ change_advanced_firewall_rule() {
     error "端口必须是 1-65535 的单值、列表、范围或混合格式"
     return "$EXIT_USAGE"
   }
-  firewall_rules_validate_protocol "$protocol" && [[ "$protocol" != all ]] || {
+  if ! firewall_rules_validate_protocol "$protocol" || [[ "$protocol" == all ]]; then
     error "协议只允许 tcp、udp 或 both"
     return "$EXIT_USAGE"
-  }
+  fi
   case "$direction" in inbound) nft_direction=input ;; outbound) nft_direction=output ;; *)
     error "方向只允许 inbound 或 outbound"
     return "$EXIT_USAGE"
@@ -308,7 +308,9 @@ firewall_rule_status_for_query() {
         fi
         if [[ -n "$basic" ]]; then
           allow_coverage="$basic"
-          firewall_rules_intervals_overlap "$ports" "$basic" && allow_any=1 || true
+          if firewall_rules_intervals_overlap "$ports" "$basic"; then
+            allow_any=1
+          fi
         fi
       fi
       while IFS= read -r record; do
