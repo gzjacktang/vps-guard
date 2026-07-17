@@ -166,7 +166,7 @@ start_rollback() {
       ;;
   esac
   case "$hook" in
-    none | firewall | ssh-firewall | ssh-restore | ssh-hardening | fail2ban) ;;
+    none | firewall | ssh-firewall | ssh-restore | ssh-hardening | fail2ban | wizard-standard | wizard-firewall | wizard-fail2ban) ;;
     *)
       error "不支持的回滚钩子：$hook"
       return "$EXIT_USAGE"
@@ -250,6 +250,10 @@ confirm_rollback_under_lock() {
         ;;
       ssh-hardening)
         error "SSH 加固回滚只能通过 ssh harden confirm 提交，不能直接取消"
+        return "$EXIT_CONFLICT"
+        ;;
+      wizard-standard | wizard-firewall | wizard-fail2ban)
+        error "快速安全配置回滚只能通过 wizard confirm 提交，不能直接取消"
         return "$EXIT_CONFLICT"
         ;;
     esac
@@ -343,9 +347,11 @@ run_rollback_unlocked() {
       ;;
     pending | running) ;;
     failed)
-      release_rollback_lock "$state_dir"
-      error "此前回滚失败，未重复执行"
-      return "$EXIT_FAILURE"
+      # systemd 单元配置了 Restart=on-failure；恢复与运行时 hook 都必须可幂等重试。
+      printf 'retry=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$state_file" || {
+        release_rollback_lock "$state_dir"
+        return "$EXIT_FAILURE"
+      }
       ;;
     *)
       release_rollback_lock "$state_dir"
@@ -392,10 +398,25 @@ run_rollback_hook() {
       reload_firewall_runtime || firewall_status=$?
       reload_sshd_runtime || ssh_status=$?
       reload_fail2ban_if_managed || fail2ban_status=$?
-      [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 && "$fail2ban_status" -eq 0 ]]
+      if [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 && "$fail2ban_status" -eq 0 ]]; then
+        return 0
+      fi
+      return "$EXIT_FAILURE"
       ;;
     ssh-hardening) reload_sshd_runtime ;;
     fail2ban) systemctl restart fail2ban ;;
+    wizard-standard)
+      local firewall_status=0 ssh_status=0 fail2ban_status=0
+      reload_firewall_runtime || firewall_status=$?
+      reload_sshd_runtime || ssh_status=$?
+      reload_fail2ban_after_restore || fail2ban_status=$?
+      if [[ "$firewall_status" -eq 0 && "$ssh_status" -eq 0 && "$fail2ban_status" -eq 0 ]]; then
+        return 0
+      fi
+      return "$EXIT_FAILURE"
+      ;;
+    wizard-firewall) reload_firewall_runtime ;;
+    wizard-fail2ban) reload_fail2ban_after_restore ;;
     *)
       error "无法执行未知回滚钩子：$1"
       return "$EXIT_FAILURE"

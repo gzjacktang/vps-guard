@@ -30,6 +30,8 @@ source "$VPS_GUARD_ROOT/lib/ssh.sh"
 source "$VPS_GUARD_ROOT/lib/ssh_hardening.sh"
 # shellcheck source=lib/fail2ban.sh
 source "$VPS_GUARD_ROOT/lib/fail2ban.sh"
+# shellcheck source=lib/wizard.sh
+source "$VPS_GUARD_ROOT/lib/wizard.sh"
 
 DRY_RUN=0
 
@@ -94,6 +96,10 @@ main() {
     fail2ban)
       require_root
       fail2ban_cli "${@:2}"
+      ;;
+    wizard)
+      require_root
+      wizard_cli "${@:2}"
       ;;
     audit)
       require_root
