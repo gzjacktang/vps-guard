@@ -116,9 +116,24 @@ test_root_user_can_open_nested_ssh_key_menu() {
   assert_output_contains "服务器端生成加密密钥（备用）"
 }
 
+test_root_user_can_open_lifecycle_menu_and_view_version() {
+  setup_test_root
+  trap teardown_test_root RETURN
+  write_stub id 'printf "0\n"'
+
+  run_vps_guard_with_input $'7\n1\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "设置、更新与卸载"
+  assert_output_contains "手动检查 GitHub Release"
+  assert_output_contains "卸载程序（保留配置、快照和日志）"
+  assert_output_contains "VPS Guard 1.0.0"
+}
+
 test_root_user_can_run_status_from_menu
 test_root_user_can_run_preflight_from_diagnostics_menu
 test_root_user_can_open_backup_menu_and_list_snapshots
 test_root_user_can_open_firewall_menu_and_view_status
 test_root_user_can_open_ssh_migration_submenu
 test_root_user_can_open_nested_ssh_key_menu
+test_root_user_can_open_lifecycle_menu_and_view_version

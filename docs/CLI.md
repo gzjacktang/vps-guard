@@ -2,6 +2,25 @@
 
 所有系统状态或配置命令均要求 root。全局 `--dry-run` 必须放在子命令之前；dry-run 只显示计划，不创建快照、状态文件或 systemd 任务。
 
+`version` 和 `update check` 是例外：它们不修改系统，也不要求 root。`update check` 只读取官方 Release 元数据，不下载或执行程序。
+
+## 版本、更新与卸载
+
+```text
+vps-guard version
+vps-guard update check
+vps-guard [--dry-run] uninstall [--yes] [--purge-data [--confirm-purge DELETE-VPS-GUARD-DATA]]
+```
+
+- `version`：显示根 `VERSION` 对应的程序版本。
+- `update check`：通过 HTTPS 读取官方 GitHub 最新 Release 元数据；有新版本和已经最新都返回 0，网络或元数据失败返回 1。后续下载、SHA-256 核对、审阅和 `install.sh --update` 必须由管理员手动完成。
+- `uninstall`：默认只删除版本程序、程序备份和固定 launcher，保留所有 `/etc` 安全配置、`/var/lib/vps-guard` 快照/事务和审计日志。
+- `--purge-data`：额外删除快照/事务和审计日志，但仍保留 `/etc` 与 live 防护；除普通卸载确认外，必须准确输入固定短语。
+- `--yes`：只跳过第一层卸载确认；不能绕过数据清理的第二确认。
+- `--confirm-purge DELETE-VPS-GUARD-DATA`：非交互数据清理的独立证明。错误短语返回 3且零删除。
+
+存在等待、运行或失败待重试的自动回滚时，卸载返回 3，防止 systemd 任务失去不可变版本程序。安装器的完整参数、版本布局和供应链边界见 [安装、手动更新与卸载](INSTALLATION.md)。
+
 ## 快速安全配置
 
 ```text
@@ -58,7 +77,7 @@ vps-guard ssh key guide --user 用户
 vps-guard ssh key import --user 用户 --file 公钥文件 [--yes]
 vps-guard ssh key generate-server --user 用户 [--yes]
 vps-guard ssh key confirm|status|discard <密钥令牌>
-vps-guard ssh harden apply --user 用户 [--proof 密钥令牌] [加固选项] [--rollback-minutes 3|5|10] [--yes]
+vps-guard ssh harden apply --user 用户 [--proof 密钥令牌] [--password-auth keep|yes|no] [--root-login keep|yes|prohibit-password|no] [--empty-passwords keep|yes|no] [--max-auth-tries keep|1-10] [--login-grace-time keep|10-120] [--rollback-minutes 3|5|10] [--yes]
 vps-guard ssh harden confirm|status <加固令牌>
 ```
 
@@ -68,7 +87,7 @@ vps-guard ssh harden confirm|status <加固令牌>
 
 ```text
 vps-guard fail2ban install [--yes]
-vps-guard fail2ban apply --preset lenient|standard|strict|progressive|custom [策略参数] [--ignore-ip 地址] [--whitelist-current-ip|--no-whitelist-current-ip] [--rollback-minutes 3|5|10] [--yes]
+vps-guard fail2ban apply --preset lenient|standard|strict|progressive|custom [--findtime 60-86400] [--maxretry 1-20] [--bantime 60-604800] [--increment true|false] [--max-bantime 60-2592000] [--ignore-ip 地址或CIDR列表] [--whitelist-current-ip|--no-whitelist-current-ip] [--rollback-minutes 3|5|10] [--yes]
 vps-guard fail2ban status
 vps-guard fail2ban banned
 vps-guard fail2ban unban <IPv4|IPv6>
@@ -125,3 +144,9 @@ vps-guard audit list
 | 3 | 环境冲突，或关键 SSH/防火墙状态无法确认，默认禁止写入 |
 | 4 | 权限不足 |
 | 5 | 系统未在正式支持矩阵中 |
+
+## dry-run 与已知限制
+
+`--dry-run` 只能位于顶级命令之前。对写操作，它仍会执行只读系统检测、参数验证、候选摘要和冲突检查，但不写配置、不重载服务、不创建快照或 systemd 任务。`uninstall` 的 dry-run 只列删除/保留范围；`update check` 本身是只读联网检查，不受 dry-run 改变；本地安装器另用 `./install.sh --dry-run`。
+
+工具不能管理云安全组、NAT、容器转发链、VPN 或第三方 nftables 表，也不能仅凭本机判断公网可达。正式支持系统、容器 smoke 与真实 VM 发布证据的区别见 [兼容性与验证层级](COMPATIBILITY.md)。

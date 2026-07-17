@@ -69,8 +69,18 @@ clear_stale_config_transaction_lock() {
   [[ ! -e "$lock_dir" ]]
 }
 
+lifecycle_lock_blocks_config_transaction() {
+  local lock
+  lock="$(lifecycle_lock_path)"
+  [[ -e "$lock" || -L "$lock" ]]
+}
+
 with_config_transaction_lock() (
   local owner_dir
+  if lifecycle_lock_blocks_config_transaction; then
+    error "安装、更新或卸载事务正在运行，拒绝启动安全配置事务"
+    return "$EXIT_CONFLICT"
+  fi
   CONFIG_TRANSACTION_OWNER_DIR=""
   prepare_config_transaction_lock_owner || return $?
   owner_dir="$CONFIG_TRANSACTION_OWNER_DIR"
@@ -82,6 +92,10 @@ with_config_transaction_lock() (
     fi
   fi
   trap 'release_config_transaction_lock "$owner_dir"' EXIT INT TERM
+  if lifecycle_lock_blocks_config_transaction; then
+    error "安装、更新或卸载事务已开始，拒绝并发写入安全配置"
+    return "$EXIT_CONFLICT"
+  fi
   [[ "$(sed -n '1p' "$(config_transaction_lock_dir)" 2>/dev/null || true)" == "${owner_dir##*/}" ]] || return "$EXIT_CONFLICT"
   "$@"
 )
@@ -90,10 +104,19 @@ with_config_transaction_lock_wait() (
   local owner_dir max_seconds ticks=0
   max_seconds="${VPS_GUARD_CONFIG_LOCK_WAIT_SECONDS:-60}"
   [[ "$max_seconds" =~ ^[0-9]+$ && "$max_seconds" -ge 1 && "$max_seconds" -le 600 ]] || max_seconds=60
+  if lifecycle_lock_blocks_config_transaction; then
+    error "安装、更新或卸载事务正在运行，拒绝启动自动恢复"
+    return "$EXIT_CONFLICT"
+  fi
   CONFIG_TRANSACTION_OWNER_DIR=""
   prepare_config_transaction_lock_owner || return $?
   owner_dir="$CONFIG_TRANSACTION_OWNER_DIR"
   while ! acquire_prepared_config_transaction_lock "$owner_dir"; do
+    if lifecycle_lock_blocks_config_transaction; then
+      release_config_transaction_lock "$owner_dir"
+      error "安装、更新或卸载事务已开始，拒绝并发自动恢复"
+      return "$EXIT_CONFLICT"
+    fi
     clear_stale_config_transaction_lock || true
     ticks=$((ticks + 1))
     if [[ "$ticks" -ge $((max_seconds * 10)) ]]; then
@@ -104,6 +127,10 @@ with_config_transaction_lock_wait() (
     sleep 0.1
   done
   trap 'release_config_transaction_lock "$owner_dir"' EXIT INT TERM
+  if lifecycle_lock_blocks_config_transaction; then
+    error "安装、更新或卸载事务已开始，拒绝并发自动恢复"
+    return "$EXIT_CONFLICT"
+  fi
   [[ "$(sed -n '1p' "$(config_transaction_lock_dir)" 2>/dev/null || true)" == "${owner_dir##*/}" ]] || return "$EXIT_CONFLICT"
   "$@"
 )

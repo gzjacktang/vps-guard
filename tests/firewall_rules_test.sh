@@ -85,7 +85,7 @@ test_ipv4_ipv6_and_source_validation() {
   assert_fails firewall_rules_validate_source '192.0.2.0/008'
   assert_fails firewall_rules_validate_source '2001:db8::1/129'
   assert_fails firewall_rules_validate_source '2001::db8::1'
-  assert_fails firewall_rules_validate_source '1.2.3.4;drop'
+  assert_fails firewall_rules_validate_source '198.51.100.4;drop'
 }
 
 test_source_containment_and_overlap_cover_ipv4_and_ipv6() {
@@ -97,9 +97,10 @@ test_source_containment_and_overlap_cover_ipv4_and_ipv6() {
   firewall_rules_sources_overlap '198.51.100.0/24' '198.51.100.128/25'
   firewall_rules_sources_overlap '2001:db8::/32' '2001:db8:ffff::/48'
   assert_fails firewall_rules_source_contains '198.51.100.128/25' '198.51.100.0/24'
-  assert_fails firewall_rules_source_contains '198.51.100.0/24' '198.51.101.8'
+  assert_fails firewall_rules_source_contains '198.51.100.0/24' '203.0.113.8'
   assert_fails firewall_rules_sources_overlap '198.51.100.0/24' '203.0.113.0/24'
-  assert_fails firewall_rules_sources_overlap '2001:db8::/32' '2001:db9::/32'
+  # 两个不重叠的文档前缀子网
+  assert_fails firewall_rules_sources_overlap '2001:db8:1::/48' '2001:db8:2::/48'
 }
 
 test_atomic_expansion_normalizes_ports_and_constrains_source_family() {

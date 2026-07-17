@@ -62,13 +62,8 @@ show_main_menu() {
       4)
         show_fail2ban_menu
         ;;
-      1 | 7)
-        if [[ "$choice" == 1 ]]; then
-          show_quick_security_menu
-        else
-          printf '该功能将在后续实施切片中提供。\n'
-        fi
-        ;;
+      1) show_quick_security_menu ;;
+      7) show_lifecycle_menu ;;
       *)
         printf '无效选项，请重新输入。\n'
         ;;
@@ -402,7 +397,40 @@ show_backup_menu() {
 }
 
 show_help() {
-  printf '用法：vps-guard [--dry-run] [status|preflight|wizard|ssh|firewall|fail2ban|backup|rollback|audit|help]\n'
+  printf '用法：vps-guard [--dry-run] [status|preflight|wizard|ssh|firewall|fail2ban|backup|rollback|audit|version|update|uninstall|help]\n'
+}
+
+show_lifecycle_menu() {
+  local choice answer proof
+  while true; do
+    printf '设置、更新与卸载\n'
+    printf '1. 查看程序版本\n'
+    printf '2. 手动检查 GitHub Release\n'
+    printf '3. 卸载程序（保留配置、快照和日志）\n'
+    printf '4. 卸载程序并清理快照和日志\n'
+    printf '0. 返回主菜单\n'
+    printf '请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1) show_vps_guard_version ;;
+      2) check_for_update || true ;;
+      3) uninstall_vps_guard 0 0 "" || true ;;
+      4)
+        printf '第一次警告：程序卸载后，现有 SSH/nftables/Fail2ban 配置仍会保留。继续查看数据清理计划？[y/N] '
+        IFS= read -r answer || answer=""
+        case "$answer" in y | Y | yes | YES) ;; *)
+          printf '已取消。\n'
+          continue
+          ;;
+        esac
+        printf '第二次确认将要求输入固定短语。\n'
+        proof=""
+        uninstall_vps_guard 1 1 "$proof" || true
+        ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
 }
 
 show_fail2ban_menu() {

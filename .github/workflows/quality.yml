@@ -12,16 +12,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install shell tools
         run: sudo apt-get update && sudo apt-get install --yes shellcheck shfmt
 
       - name: ShellCheck
-        run: shellcheck vps-guard.sh install.sh lib/*.sh tests/*.sh
+        run: shellcheck vps-guard.sh install.sh lib/*.sh scripts/*.sh tests/*.sh
 
       - name: Formatting
-        run: shfmt --diff --indent 2 --case-indent vps-guard.sh install.sh lib/*.sh tests/*.sh
+        run: shfmt --diff --indent 2 --case-indent vps-guard.sh install.sh lib/*.sh scripts/*.sh tests/*.sh
 
       - name: Behavior tests
         run: tests/run.sh
+
+  supported-container-smoke:
+    name: container-smoke (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:12-slim
+          - debian:13-slim
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - ubuntu:26.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Bootstrap container
+        run: apt-get update && apt-get install --yes bash ca-certificates coreutils diffutils findutils git grep iproute2 openssh-client ripgrep sed util-linux
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Behavior and actual-image smoke
+        run: |
+          bash tests/run.sh
+          ./install.sh --dry-run
+          ./vps-guard.sh version
+          ./vps-guard.sh status

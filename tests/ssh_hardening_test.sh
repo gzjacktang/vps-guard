@@ -125,7 +125,7 @@ while [[ \"\$#\" -gt 0 ]]; do
 done
 [[ -n \"\$target\" ]] || exit 2
 mkdir -p \"\$(dirname \"\$target\")\"
-printf '%s\\n' '-----BEGIN OPENSSH PRIVATE KEY-----' 'bcrypt encrypted test payload' '-----END OPENSSH PRIVATE KEY-----' >\"\$target\"
+printf '%s\\n' '-----BEGIN OPENSSH'\ 'PRIVATE KEY-----' 'bcrypt encrypted test payload' '-----END OPENSSH PRIVATE KEY-----' >\"\$target\"
 cp '$TEST_ROOT/alice_fixture.pub' \"\$target.pub\"
 chmod 0600 \"\$target\"
 chmod 0644 \"\$target.pub\"

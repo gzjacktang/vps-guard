@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install quality tools
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep shellcheck shfmt
+
+      - name: Verify tag and version
+        run: test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+
+      - name: Full quality gate
+        run: make check
+
+      - name: Build and verify artifacts
+        run: |
+          make release
+          cd dist
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist/
+          if-no-files-found: error
+
+  vm-gate:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Require matching Debian and Ubuntu VM evidence
+        run: |
+          scripts/check-vm-gate.sh
+          test "$(sha256sum "dist/vps-guard-$(cat VERSION)-single.sh" | awk '{print $1}')" = "$(sed -n 's/^artifact_sha256=//p' validation/vm/v1.env)"
+
+  publish:
+    needs: vm-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
