@@ -43,6 +43,7 @@ jobs:
     steps:
       - name: Bootstrap container
         run: apt-get update && apt-get install --yes bash ca-certificates coreutils diffutils findutils git grep iproute2 openssh-client ripgrep sed util-linux
+          e2fsprogs
 
       - name: Checkout
         uses: actions/checkout@v7

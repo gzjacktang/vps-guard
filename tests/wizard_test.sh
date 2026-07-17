@@ -68,7 +68,8 @@ if [[ \"\$*\" == 'restart fail2ban' && -e '$TEST_ROOT/fail-f2b-once' ]]; then
   exit 1
 fi
 if [[ \"\$1\" == 'stop' && -e '$TEST_ROOT/break-wizard-state-on-stop' ]]; then
-  chmod 0400 '$TEST_ROOT/data/wizards/'*/state
+  # root 容器必须阻止写入；Linux 用 chattr +i，macOS 用 chflags uchg
+  chattr +i '$TEST_ROOT/data/wizards/'*/state 2>/dev/null     || chflags uchg '$TEST_ROOT/data/wizards/'*/state 2>/dev/null     || chmod 0400 '$TEST_ROOT/data/wizards/'*/state
 fi
 if [[ \"\$1\" == 'stop' && -e '$TEST_ROOT/fail-first-stop-then-break-state' ]]; then
   count=0
@@ -76,7 +77,8 @@ if [[ \"\$1\" == 'stop' && -e '$TEST_ROOT/fail-first-stop-then-break-state' ]]; 
   count=\$((count + 1))
   printf '%s\\n' \"\$count\" >'$TEST_ROOT/stop-count'
   if [[ \"\$count\" -eq 1 ]]; then exit 1; fi
-  chmod 0400 '$TEST_ROOT/data/wizards/'*/state
+  # root 容器必须阻止写入；Linux 用 chattr +i，macOS 用 chflags uchg
+  chattr +i '$TEST_ROOT/data/wizards/'*/state 2>/dev/null     || chflags uchg '$TEST_ROOT/data/wizards/'*/state 2>/dev/null     || chmod 0400 '$TEST_ROOT/data/wizards/'*/state
 fi
 exit 0
 "
@@ -284,7 +286,8 @@ test_confirm_state_tail_is_recoverable_and_corruption_is_rejected() {
   [[ "$(sed -n 's/^status=//p' "$state" | tail -1)" == committing ]]
 
   rm -f "$TEST_ROOT/break-wizard-state-on-stop"
-  chmod 0600 "$state"
+  # 恢复状态文件可写
+  chattr -i "$state" 2>/dev/null || chflags nouchg "$state" 2>/dev/null || chmod 0600 "$state" || true
   run_vps_guard wizard confirm "$token"
   assert_status 0
   assert_output_contains "状态收尾已完成"
@@ -317,7 +320,8 @@ test_confirm_recovery_state_cannot_be_misreported_as_committed() {
   grep -q '^ssh_ports=22$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
 
   rm -f "$TEST_ROOT/fail-first-stop-then-break-state"
-  chmod 0600 "$state"
+  # 恢复状态文件可写
+  chattr -i "$state" 2>/dev/null || chflags nouchg "$state" 2>/dev/null || chmod 0600 "$state" || true
   run_vps_guard wizard confirm "$token"
   assert_status 1
   assert_output_contains "目标配置未提交"
