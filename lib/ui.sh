@@ -229,6 +229,7 @@ show_firewall_menu() {
     printf '3. 开放基础端口\n'
     printf '4. 关闭基础端口\n'
     printf '5. 停用 VPS Guard 防火墙\n'
+    printf '6. 高级规则与三层端口状态\n'
     printf '0. 返回主菜单\n'
     printf '请选择：'
     IFS= read -r choice || return 0
@@ -262,6 +263,56 @@ show_firewall_menu() {
         printf '自动回滚分钟数 [3/5/10，默认5]：'
         IFS= read -r minutes || return 0
         disable_firewall "${minutes:-5}" 0 || true
+        ;;
+      6) show_advanced_firewall_menu ;;
+      *) printf '无效选项，请重新输入。\n' ;;
+    esac
+  done
+}
+
+show_advanced_firewall_menu() {
+  local choice mode ports protocol direction family source interface minutes external
+  while true; do
+    printf '高级防火墙\n1. 开放高级规则\n2. 关闭高级规则\n3. 查询三层端口状态\n0. 返回\n请选择：'
+    IFS= read -r choice || return 0
+    case "$choice" in
+      0) return 0 ;;
+      1 | 2)
+        [[ "$choice" == 1 ]] && mode=open || mode=close
+        printf '端口（单值/列表/范围/混合）：'
+        IFS= read -r ports || return 0
+        printf '协议 [tcp/udp/both]：'
+        IFS= read -r protocol || return 0
+        printf '方向 [inbound/outbound，默认inbound]：'
+        IFS= read -r direction || return 0
+        printf '地址族 [ipv4/ipv6/dual，默认dual]：'
+        IFS= read -r family || return 0
+        printf '来源 [all/IP/CIDR，出站时表示本机源地址，默认all]：'
+        IFS= read -r source || return 0
+        printf '接口（留空表示全部；入站iifname/出站oifname）：'
+        IFS= read -r interface || return 0
+        printf '自动回滚分钟数 [3/5/10，默认5]：'
+        IFS= read -r minutes || return 0
+        change_advanced_firewall_rule "$mode" "$ports" "$protocol" "${direction:-inbound}" \
+          "${family:-dual}" "${source:-all}" "$interface" "${minutes:-5}" 0 || true
+        ;;
+      3)
+        printf '端口（单值/列表/范围/混合）：'
+        IFS= read -r ports || return 0
+        printf '协议 [tcp/udp/both]：'
+        IFS= read -r protocol || return 0
+        printf '方向 [inbound/outbound，默认inbound]：'
+        IFS= read -r direction || return 0
+        printf '地址族 [ipv4/ipv6/dual，默认dual]：'
+        IFS= read -r family || return 0
+        printf '来源 [all/IP/CIDR，默认all]：'
+        IFS= read -r source || return 0
+        printf '接口（留空表示全部）：'
+        IFS= read -r interface || return 0
+        printf '外部验证 [reachable/blocked/unverified，默认unverified]：'
+        IFS= read -r external || return 0
+        show_firewall_port_status "$ports" "$protocol" "${direction:-inbound}" "${family:-dual}" \
+          "${source:-all}" "$interface" "${external:-unverified}" || true
         ;;
       *) printf '无效选项，请重新输入。\n' ;;
     esac

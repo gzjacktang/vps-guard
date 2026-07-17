@@ -145,12 +145,14 @@ test_ssh_migration_keeps_fail2ban_ports_in_sync() {
   config="$TEST_ROOT/fs/etc/fail2ban/jail.d/vps-guard.local"
   printf '# 由 VPS Guard 管理；请勿在此文件中保存私密信息\n[sshd]\nenabled = true\nport = 22\n' >"$config"
   chmod 0600 "$config"
+  printf '%s\n' 'rule=accept|input|tcp|ipv4|8443|198.51.100.0/24|eth0' >>"$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   write_stub fail2ban-client "printf '%s\\n' \"\$*\" >>'$TEST_ROOT/fail2ban-client.log'; exit 0"
 
   run_vps_guard ssh migrate --port 2222 --yes
 
   assert_status 0
   grep -q '^port = 22,2222$' "$config"
+  grep -q '^rule=accept|input|tcp|ipv4|8443|198.51.100.0/24|eth0$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   token="${COMMAND_OUTPUT#*SSH 迁移等待新会话确认：}"
   token="${token%%$'\n'*}"
 
@@ -159,6 +161,7 @@ test_ssh_migration_keeps_fail2ban_ports_in_sync() {
 
   assert_status 0
   grep -q '^port = 2222$' "$config"
+  grep -q '^rule=accept|input|tcp|ipv4|8443|198.51.100.0/24|eth0$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   [[ "$(grep -c '^restart fail2ban$' "$TEST_ROOT/systemctl.log")" -eq 2 ]]
 }
 
