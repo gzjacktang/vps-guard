@@ -4,12 +4,19 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-VPS_GUARD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VPS_GUARD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+VPS_GUARD_COMMAND="${VPS_GUARD_COMMAND:-$VPS_GUARD_ROOT/$(basename "${BASH_SOURCE[0]}")}"
+if [[ -z "${VPS_GUARD_VERSION:-}" ]]; then
+  VPS_GUARD_VERSION="$(sed -n '1p' "$VPS_GUARD_ROOT/VERSION" 2>/dev/null || printf development)"
+fi
+readonly VPS_GUARD_VERSION
 
 # shellcheck source=lib/core.sh
 source "$VPS_GUARD_ROOT/lib/core.sh"
 # shellcheck source=lib/system.sh
 source "$VPS_GUARD_ROOT/lib/system.sh"
+# shellcheck source=lib/lifecycle.sh
+source "$VPS_GUARD_ROOT/lib/lifecycle.sh"
 # shellcheck source=lib/preflight.sh
 source "$VPS_GUARD_ROOT/lib/preflight.sh"
 # shellcheck source=lib/ui.sh
@@ -100,6 +107,22 @@ main() {
     wizard)
       require_root
       wizard_cli "${@:2}"
+      ;;
+    version | --version)
+      [[ "$#" -eq 1 ]] || return "$EXIT_USAGE"
+      show_vps_guard_version
+      ;;
+    update)
+      if [[ "$#" -eq 2 && "$2" == check ]]; then
+        lifecycle_cli update-check
+      else
+        error "用法：vps-guard update check"
+        return "$EXIT_USAGE"
+      fi
+      ;;
+    uninstall)
+      require_root
+      lifecycle_cli uninstall "${@:2}"
       ;;
     audit)
       require_root
