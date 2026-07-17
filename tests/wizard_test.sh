@@ -225,7 +225,7 @@ test_menu_keeps_draft_across_submenu_and_prefills_detected_ports() {
   setup_wizard_test
   trap teardown_test_root RETURN
 
-  run_vps_guard_with_input $'1\n1\n2222\n80,443\n53\nfirewall\n0\ncontinue\nn\n0\n0\n'
+  run_vps_guard_with_input $'2\n1\n2222\n80,443\n53\n2\n0\n4\nn\n0\n0\n'
 
   assert_status 0
   assert_output_contains "1. 标准防护（推荐）"
@@ -233,6 +233,7 @@ test_menu_keeps_draft_across_submenu_and_prefills_detected_ports() {
   assert_output_contains "检测到监听 UDP：53"
   assert_output_not_contains "检测到监听 TCP：22"
   assert_output_contains "防火墙管理"
+  assert_output_contains "4. 继续应用（默认）"
   assert_output_contains "SSH：22 -> 2222"
   assert_output_contains "防火墙：入站默认拒绝；TCP 80,443；UDP 53"
   assert_output_contains "已取消，未修改任何配置"

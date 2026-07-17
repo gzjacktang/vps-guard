@@ -496,67 +496,67 @@ wizard_wait_for_advanced_transactions() {
 wizard_cli() {
   local action="${1:-}" plan="" standard_port=keep tcp_ports="" udp_ports="" minutes=5 confirmed=0
   case "$action" in
-    details)
-      [[ "$#" -eq 1 ]] || return "$EXIT_USAGE"
-      wizard_show_details
-      ;;
-    status)
-      [[ "$#" -eq 2 ]] || return "$EXIT_USAGE"
-      wizard_status "$2"
-      ;;
-    confirm)
-      [[ "$#" -eq 2 ]] || return "$EXIT_USAGE"
-      wizard_confirm "$2"
-      ;;
-    apply)
-      shift
-      while [[ "$#" -gt 0 ]]; do
-        case "$1" in
-          --plan)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            plan="$2"
-            shift 2
-            ;;
-          --ssh-port)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            standard_port="$2"
-            shift 2
-            ;;
-          --tcp)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            tcp_ports="$2"
-            shift 2
-            ;;
-          --udp)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            udp_ports="$2"
-            shift 2
-            ;;
-          --rollback-minutes)
-            [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
-            minutes="$2"
-            shift 2
-            ;;
-          --yes)
-            confirmed=1
-            shift
-            ;;
-          *)
-            error "wizard apply 未知参数：$1"
-            return "$EXIT_USAGE"
-            ;;
-        esac
-      done
-      [[ -n "$plan" ]] || {
-        error "必须指定 --plan standard|firewall|fail2ban"
+  details)
+    [[ "$#" -eq 1 ]] || return "$EXIT_USAGE"
+    wizard_show_details
+    ;;
+  status)
+    [[ "$#" -eq 2 ]] || return "$EXIT_USAGE"
+    wizard_status "$2"
+    ;;
+  confirm)
+    [[ "$#" -eq 2 ]] || return "$EXIT_USAGE"
+    wizard_confirm "$2"
+    ;;
+  apply)
+    shift
+    while [[ "$#" -gt 0 ]]; do
+      case "$1" in
+      --plan)
+        [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+        plan="$2"
+        shift 2
+        ;;
+      --ssh-port)
+        [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+        standard_port="$2"
+        shift 2
+        ;;
+      --tcp)
+        [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+        tcp_ports="$2"
+        shift 2
+        ;;
+      --udp)
+        [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+        udp_ports="$2"
+        shift 2
+        ;;
+      --rollback-minutes)
+        [[ "$#" -ge 2 ]] || return "$EXIT_USAGE"
+        minutes="$2"
+        shift 2
+        ;;
+      --yes)
+        confirmed=1
+        shift
+        ;;
+      *)
+        error "wizard apply 未知参数：$1"
         return "$EXIT_USAGE"
-      }
-      wizard_apply "$plan" "$standard_port" "$tcp_ports" "$udp_ports" "$minutes" "$confirmed"
-      ;;
-    *)
-      error "用法：vps-guard wizard <details|apply|status|confirm>"
+        ;;
+      esac
+    done
+    [[ -n "$plan" ]] || {
+      error "必须指定 --plan standard|firewall|fail2ban"
       return "$EXIT_USAGE"
-      ;;
+    }
+    wizard_apply "$plan" "$standard_port" "$tcp_ports" "$udp_ports" "$minutes" "$confirmed"
+    ;;
+  *)
+    error "用法：vps-guard wizard <details|apply|status|confirm>"
+    return "$EXIT_USAGE"
+    ;;
   esac
 }
 
@@ -566,18 +566,18 @@ show_quick_security_menu() {
     printf '快速安全配置\n1. 标准防护（推荐）\n2. 仅防火墙\n3. 仅 Fail2ban\n4. 查看方案详情\n0. 返回主菜单\n请选择：'
     IFS= read -r choice || return 0
     case "$choice" in
-      0) return 0 ;;
-      4)
-        wizard_show_details
-        continue
-        ;;
-      1) plan=standard ;;
-      2) plan=firewall ;;
-      3) plan=fail2ban ;;
-      *)
-        printf '无效选项，请重新输入。\n'
-        continue
-        ;;
+    0) return 0 ;;
+    4)
+      wizard_show_details
+      continue
+      ;;
+    1) plan=standard ;;
+    2) plan=firewall ;;
+    3) plan=fail2ban ;;
+    *)
+      printf '无效选项，请重新输入。\n'
+      continue
+      ;;
     esac
     ssh_port=keep
     tcp_ports=""
@@ -608,26 +608,26 @@ show_quick_security_menu() {
       udp_ports="${udp_ports:-$udp_detected}"
     fi
     while true; do
-      printf '高级设置 [ssh/firewall/fail2ban/continue，默认continue]：'
+      printf '高级设置\n1. SSH 管理\n2. 防火墙高级规则\n3. Fail2ban 管理\n4. 继续应用（默认）\n请选择：'
       IFS= read -r advanced || return 0
-      case "${advanced:-continue}" in
-        ssh)
-          printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
-          show_ssh_menu
-          wizard_wait_for_advanced_transactions || return 0
-          ;;
-        firewall)
-          printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
-          show_firewall_menu
-          wizard_wait_for_advanced_transactions || return 0
-          ;;
-        fail2ban)
-          printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
-          show_fail2ban_menu
-          wizard_wait_for_advanced_transactions || return 0
-          ;;
-        continue) break ;;
-        *) printf '无效选项。\n' ;;
+      case "${advanced:-4}" in
+      1)
+        printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
+        show_ssh_menu
+        wizard_wait_for_advanced_transactions || return 0
+        ;;
+      2)
+        printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
+        show_firewall_menu
+        wizard_wait_for_advanced_transactions || return 0
+        ;;
+      3)
+        printf '提示：高级子菜单使用独立事务；确认完成后返回，当前向导输入会保留。\n'
+        show_fail2ban_menu
+        wizard_wait_for_advanced_transactions || return 0
+        ;;
+      4) break ;;
+      *) printf '无效选项。\n' ;;
       esac
     done
     minutes=5

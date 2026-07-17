@@ -17,10 +17,10 @@ test_root_user_can_run_status_from_menu() {
   write_stub id 'printf "0\n"'
   write_stub uname 'printf "x86_64\n"'
 
-  run_vps_guard_with_input $'5\n1\n0\n0\n'
+  run_vps_guard_with_input $'1\n1\n0\n0\n'
 
   assert_status 0
-  assert_output_contains "5. 状态与诊断"
+  assert_output_contains "1. 状态与诊断"
   assert_output_contains "1. 系统状态"
   assert_output_contains "VPS Guard 系统状态"
   assert_output_contains "已退出"
@@ -34,7 +34,7 @@ test_root_user_can_run_preflight_from_diagnostics_menu() {
   write_stub docker 'exit 0'
   write_stub ps 'printf "dockerd /usr/bin/dockerd\n"'
 
-  run_vps_guard_with_input $'5\n2\n0\n0\n'
+  run_vps_guard_with_input $'1\n2\n0\n0\n'
 
   assert_status 0
   assert_output_contains "状态与诊断"
@@ -75,7 +75,7 @@ fi
 exit 0
 '
 
-  run_vps_guard_with_input $'3\n1\n0\n0\n'
+  run_vps_guard_with_input $'4\n1\n0\n0\n'
 
   assert_status 0
   assert_output_contains "防火墙管理"
@@ -90,7 +90,7 @@ test_root_user_can_open_ssh_migration_submenu() {
   trap teardown_test_root RETURN
   write_stub id 'printf "0\n"'
 
-  run_vps_guard_with_input $'2\n0\n0\n'
+  run_vps_guard_with_input $'3\n0\n0\n'
 
   assert_status 0
   assert_output_contains "SSH 管理"
@@ -107,13 +107,14 @@ test_root_user_can_open_nested_ssh_key_menu() {
   trap teardown_test_root RETURN
   write_stub id 'printf "0\n"'
 
-  run_vps_guard_with_input $'2\n3\n0\n0\n0\n'
+  run_vps_guard_with_input $'3\n3\n0\n0\n'
 
   assert_status 0
   assert_output_contains "SSH 密钥设置"
-  assert_output_contains "客户端 Ed25519 生成引导"
+  assert_output_contains "生成 Ed25519 密钥"
   assert_output_contains "导入并校验公钥"
-  assert_output_contains "服务器端生成加密密钥（备用）"
+  assert_output_contains "3. 从新密钥会话确认"
+  assert_output_not_contains "客户端 Ed25519 生成引导"
 }
 
 test_root_user_can_open_lifecycle_menu_and_view_version() {
@@ -130,6 +131,33 @@ test_root_user_can_open_lifecycle_menu_and_view_version() {
   assert_output_contains "VPS Guard 1.0.0"
 }
 
+test_backup_menu_excludes_rollback_controls() {
+  setup_test_root
+  trap teardown_test_root RETURN
+  write_stub id 'printf "0\n"'
+
+  run_vps_guard_with_input $'6\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "5. 设置快照保留数量"
+  assert_output_not_contains "启动自动回滚"
+  assert_output_not_contains "查询自动回滚"
+}
+
+test_firewall_menu_keeps_advanced_rules_at_first_level() {
+  setup_test_root
+  trap teardown_test_root RETURN
+  write_stub id 'printf "0\n"'
+
+  run_vps_guard_with_input $'4\n0\n0\n'
+
+  assert_status 0
+  assert_output_contains "6. 开放高级规则"
+  assert_output_contains "7. 关闭高级规则"
+  assert_output_contains "8. 查询三层端口状态"
+  assert_output_not_contains "高级规则与三层端口状态"
+}
+
 test_root_user_can_run_status_from_menu
 test_root_user_can_run_preflight_from_diagnostics_menu
 test_root_user_can_open_backup_menu_and_list_snapshots
@@ -137,3 +165,5 @@ test_root_user_can_open_firewall_menu_and_view_status
 test_root_user_can_open_ssh_migration_submenu
 test_root_user_can_open_nested_ssh_key_menu
 test_root_user_can_open_lifecycle_menu_and_view_version
+test_backup_menu_excludes_rollback_controls
+test_firewall_menu_keeps_advanced_rules_at_first_level
