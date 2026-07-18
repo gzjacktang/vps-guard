@@ -204,8 +204,7 @@ uninstall_vps_guard() (
     program_present=1
   fi
 
-  printf 'VPS Guard 卸载计划\n'
-  printf '删除程序：%s、%s\n' "$program_root" "$command_link"
+  printf '将卸载 VPS Guard 程序\n'
   printf '保留系统配置：%s、SSH/nftables/Fail2ban 受管配置\n' "$config_dir"
   if [[ "$purge_data" -eq 1 ]]; then
     printf '危险：还会永久删除快照/事务数据 %s 和审计日志 %s。\n' "$data_dir" "$audit_log"
@@ -218,7 +217,7 @@ uninstall_vps_guard() (
   fi
 
   if [[ "$assume_yes" -ne 1 ]]; then
-    printf '确认只按上述范围卸载？[y/N] '
+    printf '确认卸载？[y/N] '
     IFS= read -r answer || answer=""
     case "$answer" in y | Y | yes | YES) ;; *)
       printf '已取消卸载。\n'

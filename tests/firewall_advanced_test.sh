@@ -29,19 +29,13 @@ if [[ \"\$*\" == 'list table inet vps_guard' ]]; then exit 0; fi
 if [[ \"\$1 \${2:-}\" == 'list ruleset' || \"\$1 \${2:-}\" == '-c -f' ]]; then exit 0; fi
 exit 0
 "
-  write_stub systemd-run "printf '%s\\n' \"\$*\" >>'$TEST_ROOT/systemd-run.log'; touch '$TEST_ROOT/rollback-scheduled'"
+if [[ "\$1" == '-f' ]]; then exit 0; fi
   write_stub systemctl 'exit 0'
   write_stub ss 'printf "%s\n" "tcp LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:((\"node\",pid=42,fd=3))" "tcp LISTEN 0 128 0.0.0.0:443 0.0.0.0:* users:((\"nginx\",pid=12,fd=3))" "udp UNCONN 0 0 [::]:53 [::]:* users:((\"named\",pid=9,fd=4))"'
 }
 
-confirm_last_rollback() {
-  local token="$1"
-  run_vps_guard rollback confirm "$token"
-  assert_status 0
-}
-
 test_inbound_advanced_rule_normalizes_expands_and_is_idempotent() {
-  local token runs
+  local runs
   setup_advanced_firewall_test
   trap teardown_test_root RETURN
 
@@ -55,20 +49,14 @@ test_inbound_advanced_rule_normalizes_expands_and_is_idempotent() {
   grep -q '^rule=accept|input|tcp|ipv4|80-82,443|198.51.100.0/24|eth0$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   grep -q '^rule=accept|input|udp|ipv4|80-82,443|198.51.100.0/24|eth0$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   grep -q 'ip saddr 198.51.100.0/24 iifname "eth0" tcp dport { 80-82, 443 } accept' "$TEST_ROOT/fs/etc/nftables.d/vps-guard.nft"
-  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
-  token="${token%%$'\n'*}"
-  confirm_last_rollback "$token"
-
   run_vps_guard firewall open --ports 80-82,443 --protocol both \
     --direction inbound --family ipv4 --source 198.51.100.0/24 --interface eth0 --yes
   assert_status 0
   assert_output_contains "已经开放，无需重复操作"
-  runs="$(wc -l <"$TEST_ROOT/systemd-run.log" | tr -d ' ')"
-  [[ "$runs" -eq 1 ]]
+  [[ ! -e "$TEST_ROOT/systemd-run.log" ]]
 }
 
 test_inbound_close_subtracts_ranges_and_preserves_other_rules() {
-  local token
   setup_advanced_firewall_test
   trap teardown_test_root RETURN
   printf '%s\n' \
@@ -81,19 +69,17 @@ test_inbound_close_subtracts_ranges_and_preserves_other_rules() {
   assert_status 0
   grep -q '^rule=accept|input|tcp|ipv4|80,82,443|198.51.100.0/24|eth0$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   grep -q '^rule=accept|input|udp|ipv6|5353|2001:db8::/32|eth1$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
-  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
-  token="${token%%$'\n'*}"
-  confirm_last_rollback "$token"
+  [[ ! -e "$TEST_ROOT/systemd-run.log" ]]
 }
 
-test_outbound_close_warns_and_schedules_rollback_before_runtime_apply() {
+test_outbound_close_warns_without_scheduling_rollback() {
   setup_advanced_firewall_test
   trap teardown_test_root RETURN
   write_stub nft "
 printf '%s\\n' \"\$*\" >>'$TEST_ROOT/nft.log'
 if [[ \"\$*\" == 'list table inet vps_guard' ]]; then exit 0; fi
 if [[ \"\$1 \${2:-}\" == 'list ruleset' || \"\$1 \${2:-}\" == '-c -f' ]]; then exit 0; fi
-if [[ \"\$1\" == '-f' ]]; then [[ -e '$TEST_ROOT/rollback-scheduled' ]] || exit 1; fi
+if [[ "\$1" == '-f' ]]; then exit 0; fi
 exit 0
 "
 
@@ -238,7 +224,6 @@ test_cidr_containment_drives_close_and_status_safely() {
 }
 
 test_all_source_close_removes_narrower_source_rules() {
-  local token
   setup_advanced_firewall_test
   trap teardown_test_root RETURN
   printf '%s\n' \
@@ -258,14 +243,12 @@ test_all_source_close_removes_narrower_source_rules() {
   grep -q '^rule=accept|input|udp|ipv4|443|203.0.113.8|eth1$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   grep -q '^rule=accept|input|tcp|ipv6|443|2001:db8::/32|eth1$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
   grep -q '^rule=drop|output|tcp|ipv4|443|203.0.113.8|eth1$' "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
-  token="${COMMAND_OUTPUT#*自动回滚已启动：}"
-  token="${token%%$'\n'*}"
-  confirm_last_rollback "$token"
+  [[ ! -e "$TEST_ROOT/systemd-run.log" ]]
 }
 
 test_inbound_advanced_rule_normalizes_expands_and_is_idempotent
 test_inbound_close_subtracts_ranges_and_preserves_other_rules
-test_outbound_close_warns_and_schedules_rollback_before_runtime_apply
+test_outbound_close_warns_without_scheduling_rollback
 test_invalid_dimensions_fail_before_snapshot
 test_outbound_dry_run_and_rejected_confirmation_are_read_only
 test_filtered_status_reports_rules_listener_and_external_evidence
