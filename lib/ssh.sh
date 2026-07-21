@@ -563,7 +563,7 @@ confirm_ssh_port_migration() {
 	release_rollback_lock "$rollback_dir"
 	rm -rf "$state_dir/lock"
 	audit_event ssh.confirm success "token=$token old=$old_ports new=$new_port"
-	printf 'SSH 端口迁移已提交：当前端口 %s，旧端口 %s 已从 sshd 与 VPS Guard 防火墙移除。\n' "$new_port" "$old_ports"
+	printf 'SSH 端口迁移已提交：当前端口 %s，旧端口 %s 已从 sshd 与 nftables 防火墙移除。\n' "$new_port" "$old_ports"
 }
 
 show_ssh_migration_status() {
@@ -670,7 +670,7 @@ restore_ssh_from_snapshot_unlocked() {
 
 	printf 'SSH 快照恢复摘要\n'
 	printf '目标快照：%s\n' "$target_snapshot"
-	printf '范围：SSH 配置、VPS Guard SSH 状态及匹配的自有防火墙配置\n'
+	printf '范围：SSH 配置、SSH 配置及受管 nftables 规则\n'
 	printf '不会恢复 Fail2ban、日志、密钥或其他第三方配置。\n'
 	printf '最坏后果：旧配置可能不再接受当前登录方式，VPS 可能暂时失联。\n'
 	printf '操作前确认云控制台、串行控制台或救援模式可用。\n'

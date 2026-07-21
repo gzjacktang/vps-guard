@@ -339,7 +339,7 @@ show_preflight_report() {
     printf '[阻断] 请退出并继续使用现有管理器，或先手动迁移/停用后重试。\n'
     return "$EXIT_CONFLICT"
   fi
-  printf '[事实] 未发现会阻止 VPS Guard 写入防火墙的管理器冲突。\n'
+  printf '[事实] 未发现会阻止写入 nftables 规则的管理器冲突。\n'
 }
 
 preflight_cli() {

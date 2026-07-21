@@ -320,7 +320,7 @@ test_ssh_migration_rejects_invalid_duplicate_occupied_or_unprotected_targets() {
 	rm -f "$TEST_ROOT/fs/etc/vps-guard/firewall.conf"
 	run_vps_guard ssh migrate --port 2222 --yes
 	assert_status 3
-	assert_output_contains "请先启用 VPS Guard 防火墙"
+	assert_output_contains "请先启用 nftables 防火墙"
 
 	teardown_test_root
 	setup_ssh_test
