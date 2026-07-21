@@ -331,7 +331,8 @@ show_backup_menu() {
 		printf '2. 列出快照\n'
 		printf '3. 比较快照\n'
 		printf '4. 恢复快照\n'
-		printf '5. 设置快照保留数量\n'
+		printf '5. 删除快照\n'
+		printf '6. 设置快照保留数量\n'
 		printf '0. 返回主菜单\n'
 		printf '请选择：'
 		IFS= read -r choice || return 0
@@ -354,6 +355,11 @@ show_backup_menu() {
 			restore_snapshot "$value" 0
 			;;
 		5)
+			printf '快照 ID：'
+			IFS= read -r value || return 0
+			delete_snapshot "$value" 0
+			;;
+		6)
 			printf '保留数量 [1-100]：'
 			IFS= read -r value || return 0
 			backup_cli retention "$value"
