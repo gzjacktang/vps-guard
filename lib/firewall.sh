@@ -320,7 +320,7 @@ install_firewall_configuration() {
 apply_managed_firewall_ssh_ports() {
 	local ssh_ports="$1"
 	local tcp_ports udp_ports advanced_rules candidate
-	require_firewall_enabled || return $?
+	require_firewall_enabled 2>/dev/null || return 0
 	ssh_ports="$(normalize_basic_ports "$ssh_ports")" || return $?
 	[[ -n "$ssh_ports" ]] || return "$EXIT_USAGE"
 	tcp_ports="$(firewall_state_value tcp_ports)"
