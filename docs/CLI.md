@@ -9,15 +9,14 @@
 ```text
 vps-guard version
 vps-guard update check
-vps-guard [--dry-run] uninstall [--yes] [--purge-data [--confirm-purge DELETE-VPS-GUARD-DATA]]
+vps-guard [--dry-run] uninstall [--yes] [--purge-data]
 ```
 
 - `version`：显示根 `VERSION` 对应的程序版本。
 - `update check`：通过 HTTPS 读取官方 GitHub 最新 Release 元数据；有新版本和已经最新都返回 0，网络或元数据失败返回 1。后续下载、SHA-256 核对、审阅和 `install.sh --update` 必须由管理员手动完成。
 - `uninstall`：默认只删除版本程序、程序备份和固定 launcher，保留所有 `/etc` 安全配置、`/var/lib/vps-guard` 快照/事务和审计日志。
-- `--purge-data`：额外删除快照/事务和审计日志，但仍保留 `/etc` 与 live 防护；除普通卸载确认外，必须准确输入固定短语。
-- `--yes`：只跳过第一层卸载确认；不能绕过数据清理的第二确认。
-- `--confirm-purge DELETE-VPS-GUARD-DATA`：非交互数据清理的独立证明。错误短语返回 3且零删除。
+- `--purge-data`：额外删除快照/事务和审计日志，但仍保留 `/etc` 与 live 防护。
+- `--yes`：跳过一次交互确认；不带它时，无论是否清理数据都只询问一次。
 
 存在等待、运行或失败待重试的自动回滚时，卸载返回 3，防止 systemd 任务失去不可变版本程序。安装器的完整参数、版本布局和供应链边界见 [安装、手动更新与卸载](INSTALLATION.md)。
 
@@ -26,15 +25,15 @@ vps-guard [--dry-run] uninstall [--yes] [--purge-data [--confirm-purge DELETE-VP
 ```text
 vps-guard wizard details
 vps-guard wizard apply --plan standard [--ssh-port keep|端口] [--tcp 端口表达式] [--udp 端口表达式] [--rollback-minutes 3|5|10] [--yes]
-vps-guard wizard apply --plan firewall [--tcp 端口表达式] [--udp 端口表达式] [--rollback-minutes 3|5|10] [--yes]
-vps-guard wizard apply --plan fail2ban [--rollback-minutes 3|5|10] [--yes]
+vps-guard wizard apply --plan firewall [--tcp 端口表达式] [--udp 端口表达式] [--yes]
+vps-guard wizard apply --plan fail2ban [--yes]
 vps-guard wizard status <向导令牌>
 vps-guard wizard confirm <向导令牌>
 ```
 
 菜单入口只列标准防护、仅防火墙、仅 Fail2ban 和查看详情。标准流程只收集 SSH 新端口（留空保持）及 TCP/UDP 业务端口；菜单会把非回环监听端口作为可编辑建议，并排除当前 SSH 端口。密钥、禁用密码、root 策略、来源限制及出站限制仍在对应高级子菜单。
 
-向导先完成所有候选校验，再显示 SSH、防火墙和 Fail2ban 的统一差异、最坏后果及带外恢复提醒。确认后只建立一份完整快照和一个 systemd 自动回滚任务。改变 SSH 端口时，只有目标新端口会话能执行 `wizard confirm`；普通 `rollback confirm` 会被拒绝。详见 [快速安全配置](QUICK-START.md)。
+向导先完成所有候选校验，再显示 SSH、防火墙和 Fail2ban 的统一差异、最坏后果及带外恢复提醒。仅改变 SSH 端口时才建立 systemd 自动回滚任务；只有目标新端口会话能执行 `wizard confirm`，普通 `rollback confirm` 会被拒绝。SSH 保持不变的方案会立即生效，无须确认。详见 [快速安全配置](QUICK-START.md)。
 
 ## 网络环境预检
 
@@ -48,14 +47,14 @@ vps-guard preflight
 
 ```text
 vps-guard firewall status
-vps-guard firewall enable [--tcp 端口列表] [--udp 端口列表] [--rollback-minutes 3|5|10] [--yes]
-vps-guard firewall open --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--rollback-minutes 3|5|10] [--yes]
-vps-guard firewall close --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--rollback-minutes 3|5|10] [--yes]
-vps-guard firewall disable [--rollback-minutes 3|5|10] [--yes]
+vps-guard firewall enable [--tcp 端口列表] [--udp 端口列表] [--yes]
+vps-guard firewall open --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--yes]
+vps-guard firewall close --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--yes]
+vps-guard firewall disable [--yes]
 vps-guard firewall status --ports 端口表达式 --protocol tcp|udp|both [--direction inbound|outbound] [--family ipv4|ipv6|dual] [--source all|IP|CIDR] [--interface 接口] [--external-confirm reachable|blocked]
 ```
 
-端口表达式支持单值、逗号列表、范围和混合格式。未指定高级维度时保持入站、双栈、所有来源兼容行为；显式维度进入高级路径。入站关闭撤销受管放行，出站关闭新增显式 drop，并给出 DNS/APT 等强警告。所有写入先做冲突预检、规则摘要、语法检查和快照，并在 live reload 前创建默认 5 分钟回滚。过滤状态分别报告自有规则、本机监听进程和用户提供的外部验证证据。完整说明见 [nftables 防火墙说明](FIREWALL.md)。
+端口表达式支持单值、逗号列表、范围和混合格式。未指定高级维度时保持入站、双栈、所有来源兼容行为；显式维度进入高级路径。入站关闭撤销受管放行，出站关闭新增显式 drop，并给出 DNS/APT 等强警告。所有写入先做冲突预检、规则摘要、语法检查和快照，成功后立即生效，不创建自动回滚。过滤状态分别报告自有规则、本机监听进程和用户提供的外部验证证据。完整说明见 [nftables 防火墙说明](FIREWALL.md)。
 
 ## SSH 端口迁移
 
@@ -87,15 +86,15 @@ vps-guard ssh harden confirm|status <加固令牌>
 
 ```text
 vps-guard fail2ban install [--yes]
-vps-guard fail2ban apply --preset lenient|standard|strict|progressive|custom [--findtime 60-86400] [--maxretry 1-20] [--bantime 60-604800] [--increment true|false] [--max-bantime 60-2592000] [--ignore-ip 地址或CIDR列表] [--whitelist-current-ip|--no-whitelist-current-ip] [--rollback-minutes 3|5|10] [--yes]
+vps-guard fail2ban apply --preset lenient|standard|strict|progressive|custom [--findtime 60-86400] [--maxretry 1-20] [--bantime 60-604800] [--increment true|false] [--max-bantime 60-2592000] [--ignore-ip 地址或CIDR列表] [--whitelist-current-ip|--no-whitelist-current-ip] [--yes]
 vps-guard fail2ban status
 vps-guard fail2ban banned
 vps-guard fail2ban unban <IPv4|IPv6>
-vps-guard fail2ban disable [--rollback-minutes 3|5|10] [--yes]
-vps-guard fail2ban restore <快照ID> [--rollback-minutes 3|5|10] [--yes]
+vps-guard fail2ban disable [--yes]
+vps-guard fail2ban restore <快照ID> [--yes]
 ```
 
-安装是独立操作，只使用 Debian/Ubuntu 官方 APT 包；`apply` 不会隐式安装。自定义策略必须指定 `--findtime`、`--maxretry`、`--bantime`，可另设 `--increment true|false` 与 `--max-bantime`。写入前显示最终参数并校验候选配置，写入后启动默认 5 分钟回滚。完整参数边界与恢复步骤见 [Fail2ban SSH 防护](FAIL2BAN.md)。
+安装是独立操作，只使用 Debian/Ubuntu 官方 APT 包；`apply` 不会隐式安装。自定义策略必须指定 `--findtime`、`--maxretry`、`--bantime`，可另设 `--increment true|false` 与 `--max-bantime`。写入前显示最终参数并校验候选配置，成功后立即生效，不启动自动回滚。完整参数边界与恢复步骤见 [Fail2ban SSH 防护](FAIL2BAN.md)。
 
 ## 快照
 
