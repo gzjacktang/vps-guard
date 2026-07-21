@@ -468,9 +468,9 @@ start_ssh_port_migration_unlocked() {
 		return $?
 	fi
 	audit_event ssh.migrate success "token=$token old=$old_ports new=$new_port rollback=$rollback_token"
-	printf 'SSH 迁移等待新会话确认：%s\n' "$token"
+	printf 'SSH 迁移等待新会话确认。\n'
 	printf '请保留当前会话，从新终端执行：ssh -p %s <用户>@<服务器>\n' "$new_port"
-	printf '新会话登录后执行：vps-guard ssh confirm %s\n' "$token"
+	printf '新会话登录后进入菜单：SSH 管理 → 端口管理 → 从新端口确认\n'
 }
 
 confirm_ssh_port_migration() {
@@ -776,11 +776,14 @@ ssh_cli() {
 		fi
 		;;
 	confirm | status)
-		[[ "$#" -eq 2 ]] || {
-			error "用法：vps-guard ssh $action <迁移令牌>"
-			return "$EXIT_USAGE"
-		}
-		token="$2"
+		token="${2:-}"
+		if [[ -z "$token" ]]; then
+			token="$(latest_pending_ssh_migration_token 2>/dev/null || true)"
+			[[ -n "$token" ]] || {
+				error "当前无待确认的 SSH 迁移"
+				return "$EXIT_FAILURE"
+			}
+		fi
 		if [[ "$action" == "confirm" ]]; then
 			confirm_ssh_port_migration "$token"
 		else
