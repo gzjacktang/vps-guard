@@ -128,14 +128,15 @@ show_ssh_port_menu() {
 				start_ssh_port_migration "$port" "${minutes:-5}" 0 || true
 			fi
 			;;
-		2 | 3)
-			printf 'SSH 迁移令牌：'
-			IFS= read -r token || return 0
-			if [[ "$choice" == "2" ]]; then
-				confirm_ssh_port_migration "$token" || true
-			else
-				show_ssh_migration_status "$token" || true
-			fi
+		2)
+			token="$(latest_pending_ssh_migration_token 2>/dev/null || true)"
+			[[ -n "$token" ]] || { printf '当前无待确认的 SSH 迁移。\n'; continue; }
+			confirm_ssh_port_migration "$token" || true
+			;;
+		3)
+			token="$(latest_pending_ssh_migration_token 2>/dev/null || true)"
+			[[ -n "$token" ]] || { printf '当前无待确认的 SSH 迁移。\n'; continue; }
+			show_ssh_migration_status "$token" || true
 			;;
 		*) printf '无效选项，请重新输入。\n' ;;
 		esac

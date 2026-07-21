@@ -396,7 +396,6 @@ enroll_public_key_unlocked() {
   IFS=$'\t' read -r type blob fingerprint <<<"$details"
   auth_file="$(authorized_keys_path_for_user "$user" "$home")" || return $?
   preflight_authorized_keys_target "$auth_file" "$uid" || return $?
-  ensure_no_pending_firewall_rollback || return $?
   ensure_no_pending_ssh_migration || return $?
   ensure_no_pending_ssh_enrollment || return $?
   if [[ "$confirmed" -ne 1 ]]; then
@@ -966,7 +965,6 @@ start_ssh_hardening_unlocked() {
     return "$EXIT_CONFLICT"
   fi
   ensure_standard_ssh_dropin_include || return $?
-  ensure_no_pending_firewall_rollback || return $?
   ensure_no_pending_ssh_migration || return $?
   ensure_no_pending_ssh_enrollment || return $?
   sshd -t || {
