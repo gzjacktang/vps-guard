@@ -112,6 +112,20 @@ sudo ./vps-guard.sh rollback confirm <回滚令牌>
 
 ## 安装
 
+**从 GitHub 获取最新版本：**
+
+```bash
+git clone https://github.com/gzjacktang/vps-guard.git
+cd vps-guard
+```
+
+如果已克隆，拉取最新代码：
+
+```bash
+cd vps-guard
+git pull origin main
+```
+
 先查看安装计划，不写入文件：
 
 ```bash
