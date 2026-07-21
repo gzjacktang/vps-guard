@@ -404,19 +404,41 @@ start_ssh_port_migration_unlocked() {
 	transition_ports="$(merge_basic_ports "$old_ports" "$new_port")"
 	show_ssh_migration_summary "$old_ports" "$new_port"
 	if [[ "$DRY_RUN" -eq 1 ]]; then
-		printf 'dry-run：不会写入 SSH、防火墙或启动自动回滚。\n'
+		printf 'dry-run：不会写入 SSH 配置。\n'
 		return 0
 	fi
 	if [[ "$confirmed" -ne 1 ]]; then
-		printf '确认开始迁移并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+		if [[ "$rollback_minutes" -eq 0 ]]; then
+			printf '确认迁移 SSH 端口？（不设自动回滚）[y/N] '
+		else
+			printf '确认开始迁移并启动 %s 分钟自动回滚？[y/N] ' "$rollback_minutes"
+		fi
 		IFS= read -r answer
 		case "$answer" in
 		y | Y | yes | YES) ;;
 		*)
-			printf '已取消，未修改 SSH 或防火墙。\n'
+			printf '已取消，未修改任何配置。\n'
 			return 0
 			;;
 		esac
+	fi
+
+	if [[ "$rollback_minutes" -eq 0 ]]; then
+		# 无回滚模式：直接写 sshd 配置并重载
+		if ! install_ssh_migration_ports "$new_port" || ! sshd -t; then
+			error "sshd 配置写入或语法检查失败"
+			return "$EXIT_FAILURE"
+		fi
+		apply_managed_firewall_ssh_ports "$new_port" || true
+		sync_fail2ban_ssh_ports "$new_port" || true
+		if ! reload_sshd_runtime; then
+			error "sshd 重载失败"
+			return "$EXIT_FAILURE"
+		fi
+		audit_event ssh.migrate success "old=$old_ports new=$new_port rollback=none"
+		printf 'SSH 端口已迁移到 %s，未设自动回滚。\n' "$new_port"
+		printf '请立即从新端口验证连接：ssh -p %s <用户>@<服务器>\n' "$new_port"
+		return 0
 	fi
 
 	snapshot_output="$(create_snapshot ssh-before-migration)" || return $?

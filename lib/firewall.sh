@@ -169,9 +169,9 @@ validate_firewall_candidate() {
 
 validate_rollback_minutes() {
 	case "$1" in
-	3 | 5 | 10) return 0 ;;
+	0 | 3 | 5 | 10) return 0 ;;
 	*)
-		error "回滚时间只允许 3、5 或 10 分钟"
+		error "回滚时间只允许 0（不回滚）、3、5 或 10 分钟"
 		return "$EXIT_USAGE"
 		;;
 	esac

@@ -96,7 +96,7 @@ show_ssh_menu() {
 		5)
 			printf '目标快照 ID：'
 			IFS= read -r token || return 0
-			printf '自动回滚分钟数 [3/5/10，默认5]：'
+			printf '自动回滚分钟数 [0/3/5/10，默认5，0=不回滚]：'
 			IFS= read -r minutes || return 0
 			restore_ssh_from_snapshot "$token" "${minutes:-5}" 0 || true
 			;;
@@ -120,7 +120,7 @@ show_ssh_port_menu() {
 				port=22
 				printf '警告：重置到 22 会改变当前入口，并可能暴露标准端口。\n'
 			fi
-			printf '自动回滚分钟数 [3/5/10，默认5]：'
+			printf '自动回滚分钟数 [0/3/5/10，默认5，0=不回滚]：'
 			IFS= read -r minutes || return 0
 			if [[ "$choice" == "4" ]]; then
 				start_ssh_port_migration "$port" "${minutes:-5}" 0 1 1 || true
@@ -130,12 +130,18 @@ show_ssh_port_menu() {
 			;;
 		2)
 			token="$(latest_pending_ssh_migration_token 2>/dev/null || true)"
-			[[ -n "$token" ]] || { printf '当前无待确认的 SSH 迁移。\n'; continue; }
+			[[ -n "$token" ]] || {
+				printf '当前无待确认的 SSH 迁移。\n'
+				continue
+			}
 			confirm_ssh_port_migration "$token" || true
 			;;
 		3)
 			token="$(latest_pending_ssh_migration_token 2>/dev/null || true)"
-			[[ -n "$token" ]] || { printf '当前无待确认的 SSH 迁移。\n'; continue; }
+			[[ -n "$token" ]] || {
+				printf '当前无待确认的 SSH 迁移。\n'
+				continue
+			}
 			show_ssh_migration_status "$token" || true
 			;;
 		*) printf '无效选项，请重新输入。\n' ;;
@@ -200,7 +206,7 @@ show_ssh_hardening_menu() {
 			IFS= read -r tries || return 0
 			printf '登录等待秒数 [keep/10-120，默认keep]：'
 			IFS= read -r grace || return 0
-			printf '自动回滚分钟数 [3/5/10，默认5]：'
+			printf '自动回滚分钟数 [0/3/5/10，默认5，0=不回滚]：'
 			IFS= read -r minutes || return 0
 			start_ssh_hardening "$user" "$proof" "${password:-keep}" "${root:-keep}" "${empty:-keep}" \
 				"${tries:-keep}" "${grace:-keep}" "${minutes:-5}" 0 || true
