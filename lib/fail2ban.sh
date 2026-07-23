@@ -221,7 +221,19 @@ render_fail2ban_config() {
 }
 
 reload_fail2ban_runtime() {
-	fail2ban-client -t && systemctl restart fail2ban && fail2ban-client ping >/dev/null && fail2ban-client status sshd >/dev/null
+	local retry
+	fail2ban-client -t || return $?
+	systemctl restart fail2ban || return $?
+	# 等待服务完全启动
+	for retry in {1..10}; do
+		if fail2ban-client ping >/dev/null 2>&1; then
+			fail2ban-client status sshd >/dev/null && return 0
+			return $?
+		fi
+		sleep 0.5
+	done
+	error "fail2ban 服务重启后无法连接"
+	return "$EXIT_FAILURE"
 }
 
 reload_fail2ban_if_managed() {
@@ -232,11 +244,19 @@ reload_fail2ban_if_managed() {
 
 # 组合事务恢复后，即使自有 jail 文件已被快照删除，也必须重启服务，清除内存中的旧 jail。
 reload_fail2ban_after_restore() {
+	local retry
 	fail2ban_is_installed || return 0
-	if ! fail2ban-client -t || ! systemctl restart fail2ban || ! fail2ban-client ping >/dev/null; then
-		return "$EXIT_FAILURE"
-	fi
-	[[ ! -e "$(fail2ban_config_path)" ]] || fail2ban-client status sshd >/dev/null
+	fail2ban-client -t || return "$EXIT_FAILURE"
+	systemctl restart fail2ban || return "$EXIT_FAILURE"
+	# 等待服务启动
+	for retry in {1..10}; do
+		if fail2ban-client ping >/dev/null 2>&1; then
+			[[ ! -e "$(fail2ban_config_path)" ]] || fail2ban-client status sshd >/dev/null
+			return $?
+		fi
+		sleep 0.5
+	done
+	return "$EXIT_FAILURE"
 }
 
 sync_fail2ban_ssh_ports() {
